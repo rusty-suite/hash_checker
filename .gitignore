@@ -1,3 +1,11 @@
 # Artefacts de compilation Rust — recréés automatiquement par cargo build
 /target
 /.claude
+
+# Certificats, clés et signatures — ne jamais committer
+*.pfx
+*.p12
+*.key
+*.pem
+*.cer
+*.sig
