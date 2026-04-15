@@ -1,2 +1,3 @@
 # Artefacts de compilation Rust — recréés automatiquement par cargo build
 /target
+/.claude
