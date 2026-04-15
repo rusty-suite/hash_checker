@@ -1,0 +1,34 @@
+[package]
+name = "hash_checker"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hash_checker"
+path = "src/main.rs"
+
+[dependencies]
+# GUI
+eframe = { version = "0.31", features = ["default"] }
+egui = "0.31"
+rfd = "0.15"
+
+# Hashing
+md5 = "0.7"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+crc32fast = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[profile.release]
+opt-level = 3        # Optimisation maximale de la vitesse
+strip = true         # Supprime les symboles de debug du binaire (~30-50% plus petit)
+lto = true           # Link-Time Optimization : optimise à travers tous les modules
+codegen-units = 1    # Un seul bloc de compilation → meilleure optimisation globale
+panic = "abort"      # Supprime le code de "unwinding" des panics → binaire plus petit
