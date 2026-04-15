@@ -158,13 +158,24 @@ impl HashCheckerApp {
 
         match &self.input_mode {
             InputMode::HashManual => {
-                let expected = self.manual_hash.trim().to_lowercase();
+                let raw = self.manual_hash.trim().to_lowercase();
+                // Accepte les formats "algo:hash" comme "sha256:abc123..."
+                let (expected, algo) = if let Some(pos) = raw.find(':') {
+                    let prefix = &raw[..pos];
+                    let hash = raw[pos + 1..].to_string();
+                    if let Some(detected) = Algorithm::from_str(prefix) {
+                        (hash, detected)
+                    } else {
+                        (raw.clone(), self.selected_algo.clone())
+                    }
+                } else {
+                    (raw.clone(), self.selected_algo.clone())
+                };
                 if expected.is_empty() {
                     *state.lock().unwrap() =
                         VerifyState::Error("Veuillez entrer une valeur de hash.".to_string());
                     return;
                 }
-                let algo = self.selected_algo.clone();
                 thread::spawn(move || run_verification(target, expected, algo, state));
             }
             InputMode::Auto | InputMode::FileManual => {
@@ -363,7 +374,7 @@ impl HashCheckerApp {
             for (mode, label) in &modes {
                 let selected = &self.input_mode == mode;
                 let btn = egui::Button::new(
-                    RichText::new(*label).color(if selected { Color32::WHITE } else { Color32::from_rgb(160, 160, 180) }),
+                    RichText::new(*label).color(Color32::WHITE),
                 )
                 .fill(if selected { Color32::from_rgb(50, 100, 200) } else { Color32::from_rgba_premultiplied(50, 50, 70, 150) });
                 if ui.add(btn).clicked() {
@@ -421,7 +432,7 @@ impl HashCheckerApp {
                 ui.add(egui::TextEdit::singleline(&mut self.manual_hash)
                     .desired_width(f32::INFINITY)
                     .font(FontId::monospace(12.0))
-                    .hint_text("Collez ici la valeur du hash..."));
+                    .hint_text("ex: sha256:abc123... ou simplement la valeur du hash"));
             }
         }
     }
