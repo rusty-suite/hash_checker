@@ -23,8 +23,17 @@ crc32fast = "1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# Icône de la fenêtre
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+[build-dependencies]
+# Génère le .ico depuis le .png et l'intègre dans le .exe
+winres = "0.1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ico = "0.3"
 
 [profile.release]
 opt-level = 3        # Optimisation maximale de la vitesse

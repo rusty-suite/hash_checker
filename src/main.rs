@@ -23,6 +23,8 @@ mod gui;        // Interface graphique (fenêtre egui)
 mod hasher;     // Calcul des empreintes hash (MD5, SHA-1, SHA-256, SHA-512, CRC32...)
 mod integration; // Intégration menu contextuel OS (Windows registre, Linux Nautilus/KDE/Thunar)
 
+use std::sync::Arc;
+
 use clap::Parser;
 
 fn main() {
@@ -64,7 +66,8 @@ fn launch_gui(preloaded: Option<std::path::PathBuf>) {
             .with_title("Hash Checker")
             .with_inner_size([640.0, 500.0])      // Taille initiale en pixels
             .with_min_inner_size([480.0, 380.0])  // Taille minimale redimensionnable
-            .with_drag_and_drop(true),             // Active le glisser-déposer de fichiers
+            .with_drag_and_drop(true)              // Active le glisser-déposer de fichiers
+            .with_icon(Arc::new(load_icon())),     // Icône de la fenêtre
         ..Default::default()
     };
 
@@ -87,4 +90,20 @@ fn launch_gui(preloaded: Option<std::path::PathBuf>) {
 // Raccourci pratique pour appeler launch_gui avec un fichier
 fn launch_gui_with_file(path: std::path::PathBuf) {
     launch_gui(Some(path));
+}
+
+// -----------------------------------------------------------------------------
+// Charge l'icône de la fenêtre depuis assets/hash-checker-logo.png.
+// Le fichier est intégré dans le binaire au moment de la compilation.
+// -----------------------------------------------------------------------------
+fn load_icon() -> egui::IconData {
+    let bytes = include_bytes!("../assets/hash-checker-logo.png");
+    let image = image::load_from_memory(bytes).expect("Impossible de charger hash-checker-logo.png");
+    let rgba = image.to_rgba8();
+    let (width, height) = image::GenericImageView::dimensions(&rgba);
+    egui::IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    }
 }
