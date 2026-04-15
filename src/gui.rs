@@ -41,7 +41,7 @@ use crate::integration::{
 const VERSION: &str = env!("CARGO_PKG_VERSION"); // Lue automatiquement depuis Cargo.toml
 const AUTHORS: &str = "Rusty-Suite.com";
 const PRODUCTNAME: &str = "Hash Checker";
-const GITHUB: &str = "";
+const GITHUB: &str = "https://github.com/rusty-suite/hash_checker";
 
 // -----------------------------------------------------------------------------
 // État de la vérification — partagé entre le thread de calcul et l'UI
@@ -485,6 +485,10 @@ impl HashCheckerApp {
 
                     ui.label(RichText::new("Nom du produit :").color(Color32::from_rgb(160, 160, 180)));
                     ui.label(RichText::new(PRODUCTNAME).strong().color(Color32::WHITE));
+                    ui.end_row();
+
+                    ui.label(RichText::new("Nom du produit :").color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(RichText::new(GITHUB).strong().color(Color32::WHITE));
                     ui.end_row();
 
                     ui.label(RichText::new("Algorithmes :").color(Color32::from_rgb(160, 160, 180)));
