@@ -220,7 +220,7 @@ fn seed_builtin_langs(lang_dir: &Path) {
     for (file_name, content) in BUILTIN_LANGS {
         let path = lang_dir.join(file_name);
         let needs_refresh = fs::read_to_string(&path)
-            .map(|existing| !existing.contains("[ui]"))
+            .map(|existing| !existing.contains("[ui]") || !existing.contains("verify_integrity"))
             .unwrap_or(true);
         if needs_refresh {
             let _ = fs::write(path, content.trim_start());

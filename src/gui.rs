@@ -343,6 +343,7 @@ pub struct HashCheckerApp {
     language_repo_rx: Option<Receiver<Result<Vec<String>, String>>>,
     language_repo_loading: bool,
     language_repo_status: String,
+    language_repo_ok: Option<bool>,
     language_repo_loaded_once: bool,
 
     // ── Intégration OS ────────────────────────────────────────────────────────
@@ -376,6 +377,7 @@ impl Default for HashCheckerApp {
             language_repo_rx: None,
             language_repo_loading: false,
             language_repo_status: String::new(),
+            language_repo_ok: None,
             language_repo_loaded_once: false,
             integration_status: IntegrationStatus::detect(),
             integration_message: None,
@@ -730,6 +732,7 @@ impl HashCheckerApp {
         self.language_repo_rx = Some(rx);
         self.language_repo_loading = true;
         self.language_repo_status = self.language.text("repo_loading");
+        self.language_repo_ok = None;
         let ui_texts = self.language.ui_texts();
         thread::spawn(move || {
             let result = LanguageManager::fetch_remote_languages(ui_texts);
@@ -754,11 +757,13 @@ impl HashCheckerApp {
                     self.language_repo_status =
                         self.language
                             .text_replace("repo_available", &[("count", count.to_string())]);
+                    self.language_repo_ok = Some(true);
                     self.language.network_error = false;
                 }
                 Err(e) => {
                     self.language_repo_status =
                         self.language.text_replace("repo_unavailable", &[("error", e)]);
+                    self.language_repo_ok = Some(false);
                 }
             }
         }
@@ -770,51 +775,88 @@ impl HashCheckerApp {
         }
 
         let mut open = self.show_language_window;
-        egui::Window::new(self.language.text("language_window_title"))
+        egui::Window::new("Language / Langue")
             .collapsible(false)
             .resizable(false)
-            .fixed_size(Vec2::new(460.0, 360.0))
+            .fixed_size(Vec2::new(660.0, 500.0))
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(6.0, 7.0);
+
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(self.language.text("active"))
-                            .color(Color32::from_rgb(160, 160, 180)),
+                        RichText::new(format!("{}:", self.language.text("active")))
+                            .color(Color32::from_rgb(125, 125, 135)),
                     );
                     ui.label(
-                        RichText::new(format!(
-                            "{} [{}]",
-                            self.language.active_name, self.language.active_stem
-                        ))
+                        RichText::new(&self.language.active_name)
                         .color(Color32::WHITE)
                         .strong(),
                     );
                 });
 
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(if self.language_repo_status.is_empty() {
-                        self.language.text("repo_not_refreshed")
-                    } else {
-                        self.language_repo_status.clone()
-                    })
-                        .color(if self.language_repo_loading {
-                            Color32::from_rgb(120, 180, 255)
-                        } else {
-                            Color32::from_rgb(150, 150, 170)
-                        })
-                        .font(FontId::proportional(12.0)),
-                );
-
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
 
-                ScrollArea::vertical().max_height(165.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (dot, color, text) = if self.language_repo_loading {
+                        ("●", Color32::from_rgb(120, 180, 255), self.language.text("repo_loading"))
+                    } else if self.language_repo_ok == Some(false) || self.language_repo_ok.is_none() {
+                        (
+                            "●",
+                            if self.language_repo_ok.is_none() {
+                                Color32::from_rgb(150, 150, 155)
+                            } else {
+                                Color32::from_rgb(160, 130, 70)
+                            },
+                            if self.language_repo_status.is_empty() {
+                                self.language.text("repo_not_refreshed")
+                            } else {
+                                self.language_repo_status.clone()
+                            },
+                        )
+                    } else {
+                        (
+                            "●",
+                            Color32::from_rgb(35, 140, 55),
+                            if self.language_repo_status.is_empty() {
+                                self.language.text("repo_not_refreshed")
+                            } else {
+                                self.language_repo_status.clone()
+                            },
+                        )
+                    };
+
+                    ui.label(RichText::new(dot).color(color).font(FontId::proportional(18.0)));
+                    ui.label(RichText::new(text).color(color).font(FontId::proportional(16.0)));
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Available files:")
+                            .color(Color32::from_rgb(105, 105, 112))
+                            .font(FontId::proportional(12.0)),
+                    );
+                    if ui
+                        .add_enabled(
+                            !self.language_repo_loading,
+                            egui::Button::new(self.language.text("refresh"))
+                                .min_size(Vec2::new(66.0, 20.0)),
+                        )
+                        .clicked()
+                    {
+                        self.refresh_language_repo();
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                     for pack in self.language.available_languages() {
                         let selected = pack.stem == self.language.active_stem;
-                        let mut label = format!("{} [{}]", pack.display_name, pack.stem);
+                        let mut label = pack.display_name.clone();
                         if pack.is_default {
                             label.push_str(&format!(" [{}]", self.language.default_badge));
                         }
@@ -837,10 +879,7 @@ impl HashCheckerApp {
                                     Ok(_) => {
                                         self.language.network_error = false;
                                         let msg = self.language.text("language_loaded");
-                                        if !self.language_repo_loading {
-                                            self.language_repo_status =
-                                                self.language.text("repo_not_refreshed");
-                                        }
+                                        ctx.request_repaint();
                                         (msg, true)
                                     }
                                     Err(e) => (e, false),
@@ -850,14 +889,24 @@ impl HashCheckerApp {
                 });
 
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(self.language.text_replace(
-                        "local_folder",
-                        &[("path", self.language.lang_dir.display().to_string())],
-                    ))
-                    .color(Color32::from_rgb(140, 140, 160))
-                    .font(FontId::proportional(11.0)),
-                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Folder:")
+                            .color(Color32::from_rgb(105, 105, 112))
+                            .font(FontId::proportional(12.0)),
+                    );
+                    ui.label(
+                        RichText::new(self.language.lang_dir.display().to_string())
+                            .color(Color32::from_rgb(170, 170, 175))
+                            .font(FontId::monospace(14.0)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(self.language.text("open")).clicked() {
+                            self.language.open_lang_folder();
+                        }
+                    });
+                });
 
                 if let Some((msg, ok)) = &self.language_message {
                     ui.label(RichText::new(msg).color(if *ok {
@@ -867,21 +916,10 @@ impl HashCheckerApp {
                     }));
                 }
 
+                ui.add_space(36.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(self.language.text("close")).clicked() {
                         self.show_language_window = false;
-                    }
-                    if ui
-                        .add_enabled(
-                            !self.language_repo_loading,
-                            egui::Button::new(self.language.text("refresh")),
-                        )
-                        .clicked()
-                    {
-                        self.refresh_language_repo();
-                    }
-                    if ui.button(self.language.text("open")).clicked() {
-                        self.language.open_lang_folder();
                     }
                 });
             });
@@ -1069,8 +1107,11 @@ impl HashCheckerApp {
                 });
             }
             InputMode::HashManual => {
+                let algorithm_label = self.t("algorithm");
+                let expected_hash_label = self.t("expected_hash");
+                let manual_hash_hint = self.t("manual_hash_hint");
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(self.t("algorithm")).color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(RichText::new(algorithm_label).color(Color32::from_rgb(160, 160, 180)));
                     egui::ComboBox::from_id_salt("algo_combo")
                         .selected_text(self.selected_algo.to_string())
                         .show_ui(ui, |ui| {
@@ -1081,12 +1122,12 @@ impl HashCheckerApp {
                         });
                 });
                 ui.add_space(4.0);
-                ui.label(RichText::new(self.t("expected_hash")).color(Color32::from_rgb(160, 160, 180)));
+                ui.label(RichText::new(expected_hash_label).color(Color32::from_rgb(160, 160, 180)));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.manual_hash)
                         .desired_width(f32::INFINITY)
                         .font(FontId::monospace(12.0))
-                        .hint_text(self.t("manual_hash_hint")),
+                        .hint_text(manual_hash_hint),
                 );
             }
         }
@@ -1094,13 +1135,14 @@ impl HashCheckerApp {
 
     fn show_verify_button(&mut self, ui: &mut egui::Ui) {
         let computing = *self.state.lock().unwrap() == VerifyState::Computing;
+        let verify_label = if computing {
+            self.t("computing")
+        } else {
+            self.t("verify_integrity")
+        };
         ui.horizontal(|ui| {
             let btn = egui::Button::new(
-                RichText::new(if computing {
-                    &self.t("computing")
-                } else {
-                    &self.t("verify_integrity")
-                })
+                RichText::new(verify_label)
                 .font(FontId::proportional(15.0))
                 .strong(),
             )
@@ -1218,6 +1260,7 @@ impl HashCheckerApp {
 
         // Liste scrollable des fichiers
         let available_h = ui.available_height() - 60.0; // Réserve pour les boutons
+        let input_required_text = self.t("input_required");
         ScrollArea::vertical()
             .max_height(available_h.max(100.0))
             .show(ui, |ui| {
@@ -1265,7 +1308,7 @@ impl HashCheckerApp {
                                             }
                                             HashSource::NeedsInput => {
                                                 ui.label(
-                                                    RichText::new(self.t("input_required"))
+                                                    RichText::new(input_required_text.clone())
                                                         .color(Color32::from_rgb(255, 180, 60))
                                                         .font(FontId::proportional(12.0)),
                                                 );
@@ -1422,12 +1465,13 @@ impl HashCheckerApp {
                 ui.add_space(4.0);
                 ui.label(RichText::new(self.t("expected_hash")).color(Color32::from_rgb(160, 160, 180)));
 
+                let manual_hash_hint_short = self.t("manual_hash_hint_short");
                 if let Some(multi) = &mut self.multi {
                     ui.add(
                         egui::TextEdit::singleline(&mut multi.input_hash)
                             .desired_width(f32::INFINITY)
                             .font(FontId::monospace(12.0))
-                            .hint_text(self.t("manual_hash_hint_short")),
+                            .hint_text(manual_hash_hint_short),
                     );
                 }
 
@@ -1560,6 +1604,15 @@ impl HashCheckerApp {
         } else {
             Color32::from_rgb(160, 160, 180)
         };
+        let summary_text = if all_ok {
+            self.t("all_files_intact")
+        } else if failure > 0 {
+            self.t("multi_failed")
+        } else if error > 0 {
+            self.t("multi_errors")
+        } else {
+            self.t("verification_finished")
+        };
 
         egui::Frame::new()
             .fill(summary_bg)
@@ -1567,15 +1620,7 @@ impl HashCheckerApp {
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new(if all_ok {
-                        &self.t("all_files_intact")
-                    } else if failure > 0 {
-                        &self.t("multi_failed")
-                    } else if error > 0 {
-                        &self.t("multi_errors")
-                    } else {
-                        &self.t("verification_finished")
-                    })
+                    RichText::new(summary_text)
                     .font(FontId::proportional(16.0))
                     .strong()
                     .color(summary_color),
