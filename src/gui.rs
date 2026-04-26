@@ -49,6 +49,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHORS: &str = "Rusty-Suite.com";
 const PRODUCTNAME: &str = "Hash Checker";
 const GITHUB: &str = "https://github.com/rusty-suite/hash_checker";
+const STATUS_DOT: &str = "";
 
 // =============================================================================
 // Types partagés — mode fichier unique
@@ -802,10 +803,10 @@ impl HashCheckerApp {
 
                 ui.horizontal(|ui| {
                     let (dot, color, text) = if self.language_repo_loading {
-                        ("●", Color32::from_rgb(120, 180, 255), self.language.text("repo_loading"))
+                        (STATUS_DOT, Color32::from_rgb(120, 180, 255), self.language.text("repo_loading"))
                     } else if self.language_repo_ok == Some(false) || self.language_repo_ok.is_none() {
                         (
-                            "●",
+                            STATUS_DOT,
                             if self.language_repo_ok.is_none() {
                                 Color32::from_rgb(150, 150, 155)
                             } else {
@@ -819,7 +820,7 @@ impl HashCheckerApp {
                         )
                     } else {
                         (
-                            "●",
+                            STATUS_DOT,
                             Color32::from_rgb(35, 140, 55),
                             if self.language_repo_status.is_empty() {
                                 self.language.text("repo_not_refreshed")
@@ -833,8 +834,12 @@ impl HashCheckerApp {
                         "repo_status_line",
                         &[("dot", dot.to_string()), ("status", text)],
                     );
+                    let (dot_rect, _) =
+                        ui.allocate_exact_size(Vec2::new(14.0, 18.0), egui::Sense::hover());
+                    ui.painter()
+                        .circle_filled(dot_rect.center(), 7.0, color);
                     ui.label(
-                        RichText::new(status_line)
+                        RichText::new(status_line.trim_start())
                             .color(color)
                             .font(FontId::proportional(16.0)),
                     );
@@ -860,26 +865,57 @@ impl HashCheckerApp {
 
                 ui.add_space(4.0);
 
-                ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
+                ScrollArea::vertical().max_height(245.0).show(ui, |ui| {
                     for pack in self.language.available_languages() {
                         let selected = pack.stem == self.language.active_stem;
                         let mut label = pack.display_name.clone();
+                        let code = language_display_code(&pack.stem);
                         if pack.is_default {
                             label.push_str(&format!(" [{}]", self.language.default_badge));
                         }
                         label.push_str(if pack.is_local { " [local]" } else { " [repo]" });
                         if pack.is_remote && pack.is_local {
-                            label.push_str(" [repo]");
+                            label.push_str(" [git]");
+                        } else if pack.is_remote {
+                            label = label.replace("[repo]", "[git]");
                         }
 
-                        let response = ui.selectable_label(
-                            selected,
-                            RichText::new(label).color(if pack.is_local {
-                                Color32::from_rgb(220, 230, 240)
-                            } else {
-                                Color32::from_rgb(120, 180, 255)
-                            }),
+                        let row_height = 30.0;
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), row_height),
+                            egui::Sense::click(),
                         );
+                        let bg = if selected {
+                            Color32::from_rgb(0, 112, 145)
+                        } else {
+                            Color32::from_rgb(58, 58, 58)
+                        };
+                        ui.painter().rect_filled(rect, 2.0, bg);
+
+                        let text_color = if selected {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(172, 172, 172)
+                        };
+                        ui.painter().text(
+                            rect.left_center() + Vec2::new(8.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            label,
+                            FontId::proportional(15.0),
+                            text_color,
+                        );
+                        ui.painter().text(
+                            rect.right_center() - Vec2::new(10.0, 0.0),
+                            egui::Align2::RIGHT_CENTER,
+                            code,
+                            FontId::monospace(14.0),
+                            if selected {
+                                Color32::from_rgb(220, 245, 255)
+                            } else {
+                                Color32::from_rgb(145, 145, 145)
+                            },
+                        );
+
                         if response.clicked() {
                             self.language_message =
                                 Some(match self.language.select_language(&pack) {
@@ -956,6 +992,20 @@ impl HashCheckerApp {
                     }
                 });
             });
+    }
+}
+
+fn language_display_code(stem: &str) -> String {
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() == 2 {
+        let country = parts[0];
+        let lang = parts[1];
+        match country {
+            "EN" | "FR" | "DE" | "IT" => lang.to_string(),
+            _ => format!("{}_{}", lang, country),
+        }
+    } else {
+        stem.to_string()
     }
 }
 
