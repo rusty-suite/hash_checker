@@ -16,109 +16,10 @@ const BUILTIN_LANGS: &[(&str, &str)] = &[
     ("IT_it.toml", IT_IT),
 ];
 
-const EN_EN_DEFAULT: &str = r#"
-language_name = "English (EN)"
-default_badge = "default"
-
-[ui]
-language_window_title = "Languages"
-active = "Active"
-repo_not_refreshed = "GitHub repo not refreshed."
-repo_loading = "Reading GitHub repo..."
-repo_available = "GitHub repo available: {count} language(s)."
-repo_unavailable = "Offline or repo unavailable: {error}"
-local_folder = "Local folder: {path}"
-open = "Open"
-refresh = "Refresh"
-close = "Close"
-language_loaded = "Language loaded."
-network_error = "This program needs internet access to download its language resources."
-language_file_invalid = "Invalid language file."
-no_remote_languages = "No TOML language found on the GitHub repo."
-github_index_invalid = "Invalid GitHub index: lang folder not found."
-github_index_parse_error = "Invalid GitHub index: {error}"
-curl_start_error = "Unable to start curl: {error}"
-github_index_read_error = "Unable to read GitHub index."
-github_utf8_error = "GitHub response is not UTF-8: {error}"
-"#;
-
-const FR_FR: &str = r#"
-language_name = "Français (FR)"
-default_badge = "défaut"
-
-[ui]
-language_window_title = "Langues"
-active = "Active"
-repo_not_refreshed = "Repo GitHub non actualisé."
-repo_loading = "Lecture du repo GitHub..."
-repo_available = "Repo GitHub disponible : {count} langue(s)."
-repo_unavailable = "Hors-ligne ou repo indisponible : {error}"
-local_folder = "Dossier local : {path}"
-open = "Ouvrir"
-refresh = "Actualiser"
-close = "Fermer"
-language_loaded = "Langue chargée."
-network_error = "Ce programme a besoin d'un accès internet pour télécharger ses ressources linguistiques."
-language_file_invalid = "Fichier de langue invalide."
-no_remote_languages = "Aucune langue TOML trouvée sur le repo GitHub."
-github_index_invalid = "Index GitHub invalide : dossier lang introuvable."
-github_index_parse_error = "Index GitHub invalide : {error}"
-curl_start_error = "Impossible de lancer curl : {error}"
-github_index_read_error = "Impossible de lire l'index GitHub."
-github_utf8_error = "Réponse GitHub non UTF-8 : {error}"
-"#;
-
-const DE_DE: &str = r#"
-language_name = "Deutsch (DE)"
-default_badge = "Standard"
-
-[ui]
-language_window_title = "Sprachen"
-active = "Aktiv"
-repo_not_refreshed = "GitHub-Repo nicht aktualisiert."
-repo_loading = "GitHub-Repo wird gelesen..."
-repo_available = "GitHub-Repo verfügbar: {count} Sprache(n)."
-repo_unavailable = "Offline oder Repo nicht verfügbar: {error}"
-local_folder = "Lokaler Ordner: {path}"
-open = "Öffnen"
-refresh = "Aktualisieren"
-close = "Schliessen"
-language_loaded = "Sprache geladen."
-network_error = "Dieses Programm benötigt Internetzugang, um seine Sprachressourcen herunterzuladen."
-language_file_invalid = "Ungültige Sprachdatei."
-no_remote_languages = "Keine TOML-Sprache im GitHub-Repo gefunden."
-github_index_invalid = "Ungültiger GitHub-Index: Ordner lang nicht gefunden."
-github_index_parse_error = "Ungültiger GitHub-Index: {error}"
-curl_start_error = "curl konnte nicht gestartet werden: {error}"
-github_index_read_error = "GitHub-Index konnte nicht gelesen werden."
-github_utf8_error = "GitHub-Antwort ist nicht UTF-8: {error}"
-"#;
-
-const IT_IT: &str = r#"
-language_name = "Italiano (IT)"
-default_badge = "predefinita"
-
-[ui]
-language_window_title = "Lingue"
-active = "Attiva"
-repo_not_refreshed = "Repo GitHub non aggiornato."
-repo_loading = "Lettura del repo GitHub..."
-repo_available = "Repo GitHub disponibile: {count} lingua/e."
-repo_unavailable = "Offline o repo non disponibile: {error}"
-local_folder = "Cartella locale: {path}"
-open = "Apri"
-refresh = "Aggiorna"
-close = "Chiudi"
-language_loaded = "Lingua caricata."
-network_error = "Questo programma richiede accesso a internet per scaricare le risorse linguistiche."
-language_file_invalid = "File lingua non valido."
-no_remote_languages = "Nessuna lingua TOML trovata sul repo GitHub."
-github_index_invalid = "Indice GitHub non valido: cartella lang non trovata."
-github_index_parse_error = "Indice GitHub non valido: {error}"
-curl_start_error = "Impossibile avviare curl: {error}"
-github_index_read_error = "Impossibile leggere l'indice GitHub."
-github_utf8_error = "La risposta GitHub non è UTF-8: {error}"
-"#;
+const EN_EN_DEFAULT: &str = include_str!("../lang/EN_en.default.toml");
+const FR_FR: &str = include_str!("../lang/FR_fr.toml");
+const DE_DE: &str = include_str!("../lang/DE_de.toml");
+const IT_IT: &str = include_str!("../lang/IT_it.toml");
 
 #[derive(Debug, Clone)]
 pub struct LanguagePack {
@@ -318,7 +219,10 @@ fn resolve_work_dir() -> PathBuf {
 fn seed_builtin_langs(lang_dir: &Path) {
     for (file_name, content) in BUILTIN_LANGS {
         let path = lang_dir.join(file_name);
-        if !path.exists() {
+        let needs_refresh = fs::read_to_string(&path)
+            .map(|existing| !existing.contains("[ui]"))
+            .unwrap_or(true);
+        if needs_refresh {
             let _ = fs::write(path, content.trim_start());
         }
     }
@@ -545,6 +449,67 @@ fn default_ui_texts() -> HashMap<String, String> {
         ("curl_start_error", "Unable to start curl: {error}"),
         ("github_index_read_error", "Unable to read GitHub index."),
         ("github_utf8_error", "GitHub response is not UTF-8: {error}"),
+        ("settings", "Settings"),
+        ("close_settings", "Close"),
+        ("language_tooltip", "Language settings [{lang}]"),
+        ("drop_file", "Drop a file here or click to select"),
+        ("select_file_title", "Select the file to verify"),
+        ("mode_auto", "Automatic"),
+        ("mode_checksum_file", "Checksum file"),
+        ("mode_manual_hash", "Manual hash"),
+        ("checksum_detected", "Checksum detected:"),
+        ("no_checksum_auto", "No checksum file found automatically."),
+        ("no_file_selected", "No file selected"),
+        ("choose", "Choose..."),
+        ("select_checksum_title", "Select checksum file"),
+        ("algorithm", "Algorithm:"),
+        ("expected_hash", "Expected hash:"),
+        ("manual_hash_hint", "ex: sha256:abc123... or simply the hash value"),
+        ("manual_hash_hint_short", "ex: sha256:abc123... or raw value"),
+        ("computing", "Computing..."),
+        ("verify_integrity", "Verify integrity"),
+        ("verification_success", "VERIFICATION SUCCESSFUL"),
+        ("file_intact", "The file is intact and unmodified."),
+        ("verification_failed", "VERIFICATION FAILED"),
+        ("file_modified", "The file is corrupted or has been modified!"),
+        ("error_prefix", "Error: {error}"),
+        ("multi_review_title", "{total} file(s) to verify — {selected} selected"),
+        ("multi_review_help", "Uncheck files to exclude, then click Continue."),
+        ("input_required", "Input required"),
+        ("select_all", "Select all"),
+        ("unselect_all", "Unselect all"),
+        ("continue", "Continue →"),
+        ("cancel", "Cancel"),
+        ("manual_input_title", "Hash input — file {current}/{total}"),
+        ("no_checksum_for_file", "No checksum file was found automatically for this file."),
+        ("validate", "Validate →"),
+        ("skip", "← Skip"),
+        ("all_files_intact", "ALL FILES ARE INTACT"),
+        ("multi_failed", "VERIFICATION FAILED — CORRUPTED FILE(S)"),
+        ("multi_errors", "ERROR(S) DURING VERIFICATION"),
+        ("verification_finished", "Verification finished"),
+        ("multi_stats", "{total} verified · {success} successful · {failure} failed · {error} error(s) · {skipped} skipped"),
+        ("status_success", "SUCCESS"),
+        ("status_failed", "FAILED"),
+        ("status_skipped", "Skipped"),
+        ("status_pending", "Pending"),
+        ("expected", "Expected:"),
+        ("computed", "Computed:"),
+        ("new_verification", "New verification"),
+        ("about", "About"),
+        ("version", "Version:"),
+        ("author", "Author:"),
+        ("product_name", "Product name:"),
+        ("algorithms", "Algorithms:"),
+        ("license", "License:"),
+        ("context_integration", "Context menu integration"),
+        ("context_integration_help", "Allows verifying a file from the explorer right-click menu."),
+        ("active_status", "Active"),
+        ("inactive_status", "Inactive"),
+        ("enable", "Enable"),
+        ("disable", "Disable"),
+        ("enabled_success", "Enabled successfully."),
+        ("disabled_success", "Disabled successfully."),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
