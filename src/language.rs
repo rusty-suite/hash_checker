@@ -19,21 +19,105 @@ const BUILTIN_LANGS: &[(&str, &str)] = &[
 const EN_EN_DEFAULT: &str = r#"
 language_name = "English (EN)"
 default_badge = "default"
+
+[ui]
+language_window_title = "Languages"
+active = "Active"
+repo_not_refreshed = "GitHub repo not refreshed."
+repo_loading = "Reading GitHub repo..."
+repo_available = "GitHub repo available: {count} language(s)."
+repo_unavailable = "Offline or repo unavailable: {error}"
+local_folder = "Local folder: {path}"
+open = "Open"
+refresh = "Refresh"
+close = "Close"
+language_loaded = "Language loaded."
+network_error = "This program needs internet access to download its language resources."
+language_file_invalid = "Invalid language file."
+no_remote_languages = "No TOML language found on the GitHub repo."
+github_index_invalid = "Invalid GitHub index: lang folder not found."
+github_index_parse_error = "Invalid GitHub index: {error}"
+curl_start_error = "Unable to start curl: {error}"
+github_index_read_error = "Unable to read GitHub index."
+github_utf8_error = "GitHub response is not UTF-8: {error}"
 "#;
 
 const FR_FR: &str = r#"
 language_name = "Français (FR)"
 default_badge = "défaut"
+
+[ui]
+language_window_title = "Langues"
+active = "Active"
+repo_not_refreshed = "Repo GitHub non actualisé."
+repo_loading = "Lecture du repo GitHub..."
+repo_available = "Repo GitHub disponible : {count} langue(s)."
+repo_unavailable = "Hors-ligne ou repo indisponible : {error}"
+local_folder = "Dossier local : {path}"
+open = "Ouvrir"
+refresh = "Actualiser"
+close = "Fermer"
+language_loaded = "Langue chargée."
+network_error = "Ce programme a besoin d'un accès internet pour télécharger ses ressources linguistiques."
+language_file_invalid = "Fichier de langue invalide."
+no_remote_languages = "Aucune langue TOML trouvée sur le repo GitHub."
+github_index_invalid = "Index GitHub invalide : dossier lang introuvable."
+github_index_parse_error = "Index GitHub invalide : {error}"
+curl_start_error = "Impossible de lancer curl : {error}"
+github_index_read_error = "Impossible de lire l'index GitHub."
+github_utf8_error = "Réponse GitHub non UTF-8 : {error}"
 "#;
 
 const DE_DE: &str = r#"
 language_name = "Deutsch (DE)"
 default_badge = "Standard"
+
+[ui]
+language_window_title = "Sprachen"
+active = "Aktiv"
+repo_not_refreshed = "GitHub-Repo nicht aktualisiert."
+repo_loading = "GitHub-Repo wird gelesen..."
+repo_available = "GitHub-Repo verfügbar: {count} Sprache(n)."
+repo_unavailable = "Offline oder Repo nicht verfügbar: {error}"
+local_folder = "Lokaler Ordner: {path}"
+open = "Öffnen"
+refresh = "Aktualisieren"
+close = "Schliessen"
+language_loaded = "Sprache geladen."
+network_error = "Dieses Programm benötigt Internetzugang, um seine Sprachressourcen herunterzuladen."
+language_file_invalid = "Ungültige Sprachdatei."
+no_remote_languages = "Keine TOML-Sprache im GitHub-Repo gefunden."
+github_index_invalid = "Ungültiger GitHub-Index: Ordner lang nicht gefunden."
+github_index_parse_error = "Ungültiger GitHub-Index: {error}"
+curl_start_error = "curl konnte nicht gestartet werden: {error}"
+github_index_read_error = "GitHub-Index konnte nicht gelesen werden."
+github_utf8_error = "GitHub-Antwort ist nicht UTF-8: {error}"
 "#;
 
 const IT_IT: &str = r#"
 language_name = "Italiano (IT)"
 default_badge = "predefinita"
+
+[ui]
+language_window_title = "Lingue"
+active = "Attiva"
+repo_not_refreshed = "Repo GitHub non aggiornato."
+repo_loading = "Lettura del repo GitHub..."
+repo_available = "Repo GitHub disponibile: {count} lingua/e."
+repo_unavailable = "Offline o repo non disponibile: {error}"
+local_folder = "Cartella locale: {path}"
+open = "Apri"
+refresh = "Aggiorna"
+close = "Chiudi"
+language_loaded = "Lingua caricata."
+network_error = "Questo programma richiede accesso a internet per scaricare le risorse linguistiche."
+language_file_invalid = "File lingua non valido."
+no_remote_languages = "Nessuna lingua TOML trovata sul repo GitHub."
+github_index_invalid = "Indice GitHub non valido: cartella lang non trovata."
+github_index_parse_error = "Indice GitHub non valido: {error}"
+curl_start_error = "Impossibile avviare curl: {error}"
+github_index_read_error = "Impossibile leggere l'indice GitHub."
+github_utf8_error = "La risposta GitHub non è UTF-8: {error}"
 "#;
 
 #[derive(Debug, Clone)]
@@ -54,6 +138,7 @@ pub struct LanguageManager {
     pub active_name: String,
     pub default_badge: String,
     pub network_error: bool,
+    ui: HashMap<String, String>,
     remote_files: Vec<String>,
 }
 
@@ -71,12 +156,13 @@ impl LanguageManager {
         }
 
         let selected = choose_language(&work_dir, &lang_dir);
-        let (active_stem, active_name, default_badge) = selected.unwrap_or_else(|| {
+        let (active_stem, active_name, default_badge, ui) = selected.unwrap_or_else(|| {
             network_error = true;
             (
                 "EN_en".to_string(),
                 "English (EN)".to_string(),
                 "default".to_string(),
+                default_ui_texts(),
             )
         });
 
@@ -87,6 +173,7 @@ impl LanguageManager {
             active_name,
             default_badge,
             network_error,
+            ui,
             remote_files: Vec::new(),
         }
     }
@@ -125,11 +212,11 @@ impl LanguageManager {
     pub fn select_language(&mut self, pack: &LanguagePack) -> Result<(), String> {
         let path = self.lang_dir.join(&pack.file_name);
         if !path.exists() && !download_language(&self.lang_dir, &pack.file_name) {
-            return Err("Ce programme a besoin d'un accès internet pour télécharger ses ressources linguistiques.".to_string());
+            return Err(self.text("network_error"));
         }
 
-        let Some((stem, name, badge)) = read_language_file(&path) else {
-            return Err("Fichier de langue invalide.".to_string());
+        let Some((stem, name, badge, ui)) = read_language_file(&path) else {
+            return Err(self.text("language_file_invalid"));
         };
 
         fs::write(self.work_dir.join("lang_chosen.txt"), stem.as_bytes())
@@ -137,7 +224,24 @@ impl LanguageManager {
         self.active_stem = stem;
         self.active_name = name;
         self.default_badge = badge;
+        self.ui = ui;
         Ok(())
+    }
+
+    pub fn text(&self, key: &str) -> String {
+        self.ui
+            .get(key)
+            .cloned()
+            .or_else(|| default_ui_texts().remove(key))
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    pub fn text_replace(&self, key: &str, replacements: &[(&str, String)]) -> String {
+        let mut text = self.text(key);
+        for (placeholder, value) in replacements {
+            text = text.replace(&format!("{{{}}}", placeholder), value);
+        }
+        text
     }
 
     pub fn open_lang_folder(&self) {
@@ -161,12 +265,19 @@ impl LanguageManager {
         self.remote_files = remote_files;
     }
 
-    pub fn fetch_remote_languages() -> Result<Vec<String>, String> {
-        let output = run_curl_text(GITHUB_LANG_INDEX)?;
+    pub fn ui_texts(&self) -> HashMap<String, String> {
+        self.ui.clone()
+    }
+
+    pub fn fetch_remote_languages(ui: HashMap<String, String>) -> Result<Vec<String>, String> {
+        let output = run_curl_text(GITHUB_LANG_INDEX, &ui)?;
         let value: serde_json::Value =
-            serde_json::from_str(&output).map_err(|e| format!("Index GitHub invalide : {}", e))?;
+            serde_json::from_str(&output).map_err(|e| {
+                text_from_map(&ui, "github_index_parse_error")
+                    .replace("{error}", &e.to_string())
+            })?;
         let Some(items) = value.as_array() else {
-            return Err("Index GitHub invalide : dossier lang introuvable.".to_string());
+            return Err(text_from_map(&ui, "github_index_invalid"));
         };
 
         let mut files = Vec::new();
@@ -179,7 +290,7 @@ impl LanguageManager {
         }
 
         if files.is_empty() {
-            return Err("Aucune langue TOML trouvée sur le repo GitHub.".to_string());
+            return Err(text_from_map(&ui, "no_remote_languages"));
         }
 
         Ok(files)
@@ -223,7 +334,10 @@ fn has_local_langs(lang_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn choose_language(work_dir: &Path, lang_dir: &Path) -> Option<(String, String, String)> {
+fn choose_language(
+    work_dir: &Path,
+    lang_dir: &Path,
+) -> Option<(String, String, String, HashMap<String, String>)> {
     if let Ok(chosen) = fs::read_to_string(work_dir.join("lang_chosen.txt")) {
         if let Some(found) = find_by_stem(lang_dir, chosen.trim()) {
             return Some(found);
@@ -257,7 +371,7 @@ fn system_locale_candidates() -> Vec<String> {
         .collect()
 }
 
-fn find_by_stem(lang_dir: &Path, stem: &str) -> Option<(String, String, String)> {
+fn find_by_stem(lang_dir: &Path, stem: &str) -> Option<(String, String, String, HashMap<String, String>)> {
     let target = stem.trim_end_matches(".default");
     local_lang_files(lang_dir).into_iter().find_map(|path| {
         let file_stem = lang_stem(&path)?;
@@ -269,7 +383,10 @@ fn find_by_stem(lang_dir: &Path, stem: &str) -> Option<(String, String, String)>
     })
 }
 
-fn find_by_locale(lang_dir: &Path, locale: &str) -> Option<(String, String, String)> {
+fn find_by_locale(
+    lang_dir: &Path,
+    locale: &str,
+) -> Option<(String, String, String, HashMap<String, String>)> {
     let normalized = locale.to_lowercase();
     let parts: Vec<&str> = normalized.split('_').collect();
     let exact = if parts.len() >= 2 {
@@ -295,7 +412,7 @@ fn find_by_locale(lang_dir: &Path, locale: &str) -> Option<(String, String, Stri
     })
 }
 
-fn find_default(lang_dir: &Path) -> Option<(String, String, String)> {
+fn find_default(lang_dir: &Path) -> Option<(String, String, String, HashMap<String, String>)> {
     local_lang_files(lang_dir).into_iter().find_map(|path| {
         let name = path.file_name()?.to_string_lossy();
         if name.ends_with(".default.toml") {
@@ -320,7 +437,7 @@ fn local_lang_files(lang_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn read_language_file(path: &Path) -> Option<(String, String, String)> {
+fn read_language_file(path: &Path) -> Option<(String, String, String, HashMap<String, String>)> {
     let content = fs::read_to_string(path).ok()?;
     let table: toml::Table = toml::from_str(&content).ok()?;
     let stem = lang_stem(path)?;
@@ -334,14 +451,22 @@ fn read_language_file(path: &Path) -> Option<(String, String, String)> {
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
-    Some((stem, name, badge))
+    let mut ui = default_ui_texts();
+    if let Some(toml::Value::Table(ui_table)) = table.get("ui") {
+        for (key, value) in ui_table {
+            if let Some(text) = value.as_str() {
+                ui.insert(key.clone(), text.to_string());
+            }
+        }
+    }
+    Some((stem, name, badge, ui))
 }
 
 fn pack_from_path(path: &Path, is_local: bool, is_remote: bool) -> Option<LanguagePack> {
     let file_name = path.file_name()?.to_string_lossy().to_string();
     let stem = lang_stem(path)?;
     let display_name = read_language_file(path)
-        .map(|(_, name, _)| name)
+        .map(|(_, name, _, _)| name)
         .unwrap_or_else(|| display_name_from_stem(&stem));
     Some(LanguagePack {
         stem,
@@ -393,6 +518,46 @@ fn display_name_from_stem(stem: &str) -> String {
     .to_string()
 }
 
+fn default_ui_texts() -> HashMap<String, String> {
+    [
+        ("language_window_title", "Languages"),
+        ("active", "Active"),
+        ("repo_not_refreshed", "GitHub repo not refreshed."),
+        ("repo_loading", "Reading GitHub repo..."),
+        ("repo_available", "GitHub repo available: {count} language(s)."),
+        ("repo_unavailable", "Offline or repo unavailable: {error}"),
+        ("local_folder", "Local folder: {path}"),
+        ("open", "Open"),
+        ("refresh", "Refresh"),
+        ("close", "Close"),
+        ("language_loaded", "Language loaded."),
+        (
+            "network_error",
+            "This program needs internet access to download its language resources.",
+        ),
+        ("language_file_invalid", "Invalid language file."),
+        ("no_remote_languages", "No TOML language found on the GitHub repo."),
+        (
+            "github_index_invalid",
+            "Invalid GitHub index: lang folder not found.",
+        ),
+        ("github_index_parse_error", "Invalid GitHub index: {error}"),
+        ("curl_start_error", "Unable to start curl: {error}"),
+        ("github_index_read_error", "Unable to read GitHub index."),
+        ("github_utf8_error", "GitHub response is not UTF-8: {error}"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+fn text_from_map(ui: &HashMap<String, String>, key: &str) -> String {
+    ui.get(key)
+        .cloned()
+        .or_else(|| default_ui_texts().remove(key))
+        .unwrap_or_else(|| key.to_string())
+}
+
 fn download_default_lang(lang_dir: &Path) -> bool {
     download_language(lang_dir, "EN_en.default.toml")
 }
@@ -422,7 +587,7 @@ fn download_language(lang_dir: &Path, file_name: &str) -> bool {
     ok
 }
 
-fn run_curl_text(url: &str) -> Result<String, String> {
+fn run_curl_text(url: &str, ui: &HashMap<String, String>) -> Result<String, String> {
     #[cfg(windows)]
     let output = Command::new("curl.exe")
         .args(["-L", "--fail", "--silent", "--show-error", url])
@@ -433,15 +598,18 @@ fn run_curl_text(url: &str) -> Result<String, String> {
         .args(["-fsSL", url])
         .output();
 
-    let output = output.map_err(|e| format!("Impossible de lancer curl : {}", e))?;
+    let output = output.map_err(|e| {
+        text_from_map(ui, "curl_start_error").replace("{error}", &e.to_string())
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            "Impossible de lire l'index GitHub.".to_string()
+            text_from_map(ui, "github_index_read_error")
         } else {
             stderr
         });
     }
 
-    String::from_utf8(output.stdout).map_err(|e| format!("Réponse GitHub non UTF-8 : {}", e))
+    String::from_utf8(output.stdout)
+        .map_err(|e| text_from_map(ui, "github_utf8_error").replace("{error}", &e.to_string()))
 }
