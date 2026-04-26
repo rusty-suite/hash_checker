@@ -12,14 +12,20 @@ const GITHUB_LANG_INDEX: &str =
 const BUILTIN_LANGS: &[(&str, &str)] = &[
     ("EN_en.default.toml", EN_EN_DEFAULT),
     ("FR_fr.toml", FR_FR),
+    ("CH_fr.toml", CH_FR),
     ("DE_de.toml", DE_DE),
+    ("CH_de.toml", CH_DE),
     ("IT_it.toml", IT_IT),
+    ("CH_it.toml", CH_IT),
 ];
 
 const EN_EN_DEFAULT: &str = include_str!("../lang/EN_en.default.toml");
 const FR_FR: &str = include_str!("../lang/FR_fr.toml");
+const CH_FR: &str = include_str!("../lang/CH_fr.toml");
 const DE_DE: &str = include_str!("../lang/DE_de.toml");
+const CH_DE: &str = include_str!("../lang/CH_de.toml");
 const IT_IT: &str = include_str!("../lang/IT_it.toml");
+const CH_IT: &str = include_str!("../lang/CH_it.toml");
 
 #[derive(Debug, Clone)]
 pub struct LanguagePack {
@@ -115,6 +121,7 @@ impl LanguageManager {
         if !path.exists() && !download_language(&self.lang_dir, &pack.file_name) {
             return Err(self.text("network_error"));
         }
+        refresh_builtin_if_stale(&path, &pack.file_name);
 
         let Some((stem, name, badge, ui)) = read_language_file(&path) else {
             return Err(self.text("language_file_invalid"));
@@ -219,12 +226,26 @@ fn resolve_work_dir() -> PathBuf {
 fn seed_builtin_langs(lang_dir: &Path) {
     for (file_name, content) in BUILTIN_LANGS {
         let path = lang_dir.join(file_name);
-        let needs_refresh = fs::read_to_string(&path)
-            .map(|existing| !existing.contains("[ui]") || !existing.contains("verify_integrity"))
-            .unwrap_or(true);
-        if needs_refresh {
-            let _ = fs::write(path, content.trim_start());
-        }
+        refresh_builtin_file(&path, content);
+    }
+}
+
+fn refresh_builtin_if_stale(path: &Path, file_name: &str) {
+    if let Some((_, content)) = BUILTIN_LANGS.iter().find(|(name, _)| *name == file_name) {
+        refresh_builtin_file(path, content);
+    }
+}
+
+fn refresh_builtin_file(path: &Path, content: &str) {
+    let needs_refresh = fs::read_to_string(path)
+        .map(|existing| {
+            !existing.contains("[ui]")
+                || !existing.contains("verify_integrity")
+                || !existing.contains("repo_status_line")
+        })
+        .unwrap_or(true);
+    if needs_refresh {
+        let _ = fs::write(path, content.trim_start());
     }
 }
 
