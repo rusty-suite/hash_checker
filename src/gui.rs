@@ -663,26 +663,29 @@ impl eframe::App for HashCheckerApp {
                         };
                     }
 
-                    let lang_btn = egui::Button::new(
-                        RichText::new("🌐")
-                            .font(FontId::proportional(14.0))
-                            .color(Color32::from_rgb(180, 180, 200)),
-                    )
-                    .fill(Color32::from_rgba_premultiplied(50, 50, 70, 180))
-                    .min_size(Vec2::new(28.0, 26.0));
-                    if ui
-                        .add(lang_btn)
-                        .on_hover_text(self.tr(
-                            "language_tooltip",
-                            &[("lang", self.language.active_stem.clone())],
-                        ))
-                        .clicked()
-                    {
-                        self.show_language_window = true;
-                        if !self.language_repo_loaded_once {
-                            self.refresh_language_repo();
+                    ui.scope(|ui| {
+                        ui.spacing_mut().button_padding = Vec2::new(5.0, 3.0);
+                        let lang_btn = egui::Button::new(
+                            RichText::new("🌐")
+                                .font(FontId::proportional(13.0))
+                                .color(Color32::from_rgb(180, 180, 200)),
+                        )
+                        .fill(Color32::from_rgba_premultiplied(50, 50, 70, 180))
+                        .min_size(Vec2::new(24.0, 22.0));
+                        if ui
+                            .add(lang_btn)
+                            .on_hover_text(self.tr(
+                                "language_tooltip",
+                                &[("lang", self.language.active_stem.clone())],
+                            ))
+                            .clicked()
+                        {
+                            self.show_language_window = true;
+                            if !self.language_repo_loaded_once {
+                                self.refresh_language_repo();
+                            }
                         }
-                    }
+                    });
                 });
             });
 
