@@ -27,12 +27,13 @@
 // =============================================================================
 
 // Déclaration des modules du projet
-mod checksum;    // Lecture et parsing des fichiers checksum (.sha256, SHA256SUMS, etc.)
-mod cli;         // Interface ligne de commande (arguments, affichage résultat terminal)
-mod gui;         // Interface graphique (fenêtre egui)
-mod hasher;      // Calcul des empreintes hash (MD5, SHA-1, SHA-256, SHA-512, CRC32...)
+mod checksum; // Lecture et parsing des fichiers checksum (.sha256, SHA256SUMS, etc.)
+mod cli; // Interface ligne de commande (arguments, affichage résultat terminal)
+mod gui; // Interface graphique (fenêtre egui)
+mod hasher; // Calcul des empreintes hash (MD5, SHA-1, SHA-256, SHA-512, CRC32...)
 mod integration; // Intégration menu contextuel OS (Windows registre, Linux Nautilus/KDE/Thunar)
-mod ipc;         // Communication inter-processus (instance unique via TCP local)
+mod ipc; // Communication inter-processus (instance unique via TCP local)
+mod language; // Ressources linguistiques et répertoire de travail Rusty Suite
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,7 +73,7 @@ fn main() {
     // Déclenchés seulement si des args commencent par '-' (pas de fichiers valides)
     if raw_args.len() > 1 {
         let cli = cli::Cli::parse(); // Clap parse et valide les arguments
-        cli::run_cli(cli);           // Exécute la logique CLI en mode terminal
+        cli::run_cli(cli); // Exécute la logique CLI en mode terminal
         return;
     }
 
@@ -114,7 +115,12 @@ fn launch_gui_empty(ipc_rx: std::sync::mpsc::Receiver<PathBuf>) {
     eframe::run_native(
         "Hash Checker",
         options,
-        Box::new(move |cc| Ok(Box::new(gui::HashCheckerApp::new_with_ipc(cc, Some(ipc_rx))))),
+        Box::new(move |cc| {
+            Ok(Box::new(gui::HashCheckerApp::new_with_ipc(
+                cc,
+                Some(ipc_rx),
+            )))
+        }),
     )
     .expect("Erreur lors du lancement de la GUI");
 }
@@ -127,7 +133,7 @@ fn build_window_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Hash Checker")
-            .with_inner_size([680.0, 540.0])      // Un peu plus haut pour le mode liste
+            .with_inner_size([680.0, 540.0]) // Un peu plus haut pour le mode liste
             .with_min_inner_size([520.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(Arc::new(load_icon())),
@@ -142,7 +148,8 @@ fn build_window_options() -> eframe::NativeOptions {
 // -----------------------------------------------------------------------------
 fn load_icon() -> eframe::egui::IconData {
     let bytes = include_bytes!("../assets/hash-checker-logo.png");
-    let image = image::load_from_memory(bytes).expect("Impossible de charger hash-checker-logo.png");
+    let image =
+        image::load_from_memory(bytes).expect("Impossible de charger hash-checker-logo.png");
     let rgba = image.to_rgba8();
     let (width, height) = image::GenericImageView::dimensions(&rgba);
     eframe::egui::IconData {
