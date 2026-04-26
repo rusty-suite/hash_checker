@@ -665,10 +665,11 @@ impl eframe::App for HashCheckerApp {
 
                     let lang_btn = egui::Button::new(
                         RichText::new("🌐")
-                            .font(FontId::proportional(16.0))
+                            .font(FontId::proportional(14.0))
                             .color(Color32::from_rgb(180, 180, 200)),
                     )
-                    .fill(Color32::from_rgba_premultiplied(50, 50, 70, 180));
+                    .fill(Color32::from_rgba_premultiplied(50, 50, 70, 180))
+                    .min_size(Vec2::new(28.0, 26.0));
                     if ui
                         .add(lang_btn)
                         .on_hover_text(self.tr(
