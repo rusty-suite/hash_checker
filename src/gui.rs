@@ -30,18 +30,19 @@
 // =============================================================================
 
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use eframe::egui::{self, Color32, FontId, RichText, ScrollArea, Stroke, Vec2};
 
 use crate::checksum::{find_checksum_file, find_entry_for_file, parse_checksum_file};
-use crate::hasher::{compute_hash, Algorithm};
+use crate::hasher::{Algorithm, compute_hash};
 use crate::integration::{
-    current_exe_path, install_kde, install_nautilus, install_thunar, install_windows,
-    uninstall_kde, uninstall_nautilus, uninstall_thunar, uninstall_windows, IntegrationStatus,
+    IntegrationStatus, current_exe_path, install_kde, install_nautilus, install_thunar,
+    install_windows, uninstall_kde, uninstall_nautilus, uninstall_thunar, uninstall_windows,
 };
+use crate::language::LanguageManager;
 
 // Informations affichées dans le panneau "À propos"
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -66,9 +67,9 @@ enum VerifyState {
 /// Mode de saisie du hash de référence (onglets du mode fichier unique).
 #[derive(Debug, Clone, PartialEq)]
 enum InputMode {
-    Auto,        // Recherche automatique d'un fichier checksum dans le répertoire
-    FileManual,  // L'utilisateur sélectionne manuellement le fichier checksum
-    HashManual,  // L'utilisateur saisit directement la valeur du hash
+    Auto,       // Recherche automatique d'un fichier checksum dans le répertoire
+    FileManual, // L'utilisateur sélectionne manuellement le fichier checksum
+    HashManual, // L'utilisateur saisit directement la valeur du hash
 }
 
 /// Panneau affiché dans la fenêtre principale.
@@ -101,12 +102,12 @@ enum HashSource {
 /// Partagé entre le thread de calcul et l'UI via Arc<Mutex<>>.
 #[derive(Debug, Clone, PartialEq)]
 enum EntryStatus {
-    Pending,                    // Pas encore traité
-    Computing,                  // Calcul en cours dans un thread séparé
-    Success(String, String),    // (hash_attendu, hash_calculé) — identiques
-    Failure(String, String),    // (hash_attendu, hash_calculé) — différents
-    Error(String),              // Erreur (fichier illisible, checksum introuvable, etc.)
-    Skipped,                    // Ignoré (décoché ou passé par l'utilisateur)
+    Pending,                 // Pas encore traité
+    Computing,               // Calcul en cours dans un thread séparé
+    Success(String, String), // (hash_attendu, hash_calculé) — identiques
+    Failure(String, String), // (hash_attendu, hash_calculé) — différents
+    Error(String),           // Erreur (fichier illisible, checksum introuvable, etc.)
+    Skipped,                 // Ignoré (décoché ou passé par l'utilisateur)
 }
 
 /// Une entrée dans la liste de vérification multi-fichiers.
@@ -335,6 +336,15 @@ pub struct HashCheckerApp {
     // ── Panneau actif (main ou paramètres) ───────────────────────────────────
     active_panel: Panel,
 
+    // ── Langues Rusty Suite ──────────────────────────────────────────────────
+    language: LanguageManager,
+    show_language_window: bool,
+    language_message: Option<(String, bool)>,
+    language_repo_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    language_repo_loading: bool,
+    language_repo_status: String,
+    language_repo_loaded_once: bool,
+
     // ── Intégration OS ────────────────────────────────────────────────────────
     integration_status: IntegrationStatus,
     integration_message: Option<(String, bool)>,
@@ -360,6 +370,13 @@ impl Default for HashCheckerApp {
             state: Arc::new(Mutex::new(VerifyState::Idle)),
             drag_hover: false,
             active_panel: Panel::Main,
+            language: LanguageManager::initialize(),
+            show_language_window: false,
+            language_message: None,
+            language_repo_rx: None,
+            language_repo_loading: false,
+            language_repo_status: "Repo GitHub non actualisé.".to_string(),
+            language_repo_loaded_once: false,
             integration_status: IntegrationStatus::detect(),
             integration_message: None,
             ipc_rx: None,
@@ -370,8 +387,14 @@ impl Default for HashCheckerApp {
 
 impl HashCheckerApp {
     /// Lancement sans fichier (GUI vide, drag & drop).
-    pub fn new_with_ipc(_cc: &eframe::CreationContext<'_>, ipc_rx: Option<Receiver<PathBuf>>) -> Self {
-        Self { ipc_rx, ..Self::default() }
+    pub fn new_with_ipc(
+        _cc: &eframe::CreationContext<'_>,
+        ipc_rx: Option<Receiver<PathBuf>>,
+    ) -> Self {
+        Self {
+            ipc_rx,
+            ..Self::default()
+        }
     }
 
     /// Rétro-compatibilité : sans IPC (ne devrait plus être appelé directement).
@@ -442,7 +465,9 @@ impl HashCheckerApp {
     // ── Vérification mode fichier unique ──────────────────────────────────────
 
     fn start_verification(&mut self) {
-        let Some(target) = self.target_file.clone() else { return; };
+        let Some(target) = self.target_file.clone() else {
+            return;
+        };
         *self.state.lock().unwrap() = VerifyState::Computing;
         let state = Arc::clone(&self.state);
 
@@ -483,7 +508,10 @@ impl HashCheckerApp {
                 thread::spawn(move || {
                     let entries = match parse_checksum_file(&cs_path) {
                         Ok(e) => e,
-                        Err(e) => { *state.lock().unwrap() = VerifyState::Error(e); return; }
+                        Err(e) => {
+                            *state.lock().unwrap() = VerifyState::Error(e);
+                            return;
+                        }
                     };
                     let entry = match find_entry_for_file(&entries, &target) {
                         Some(e) => e.clone(),
@@ -507,13 +535,17 @@ impl HashCheckerApp {
     /// Lance les threads de vérification pour tous les fichiers sélectionnés.
     /// Appelé lors du passage en phase Verifying.
     fn start_multi_verification(&mut self) {
-        let Some(multi) = &mut self.multi else { return; };
+        let Some(multi) = &mut self.multi else {
+            return;
+        };
 
         for entry in &mut multi.entries {
             let status_arc = Arc::clone(&entry.status);
 
             // Fichiers non sélectionnés ou explicitement ignorés → Skipped direct
-            if !entry.selected || matches!(entry.source, HashSource::Skipped | HashSource::NeedsInput) {
+            if !entry.selected
+                || matches!(entry.source, HashSource::Skipped | HashSource::NeedsInput)
+            {
                 *status_arc.lock().unwrap() = EntryStatus::Skipped;
                 continue;
             }
@@ -619,6 +651,26 @@ impl eframe::App for HashCheckerApp {
                             Panel::Settings
                         };
                     }
+
+                    let lang_btn = egui::Button::new(
+                        RichText::new("🌐")
+                            .font(FontId::proportional(16.0))
+                            .color(Color32::from_rgb(180, 180, 200)),
+                    )
+                    .fill(Color32::from_rgba_premultiplied(50, 50, 70, 180));
+                    if ui
+                        .add(lang_btn)
+                        .on_hover_text(format!(
+                            "Paramètres de langue [{}]",
+                            self.language.active_stem
+                        ))
+                        .clicked()
+                    {
+                        self.show_language_window = true;
+                        if !self.language_repo_loaded_once {
+                            self.refresh_language_repo();
+                        }
+                    }
                 });
             });
 
@@ -640,6 +692,10 @@ impl eframe::App for HashCheckerApp {
             }
         });
 
+        self.poll_language_repo();
+        self.show_language_dialog(ctx);
+        self.show_network_error_dialog(ctx);
+
         // Demande un redessin si un calcul est en cours
         let needs_repaint = if let Some(multi) = &self.multi {
             multi.phase == MultiPhase::Verifying
@@ -649,6 +705,186 @@ impl eframe::App for HashCheckerApp {
         if needs_repaint {
             ctx.request_repaint();
         }
+    }
+}
+
+// =============================================================================
+// Fenêtres langues et erreurs réseau
+// =============================================================================
+
+impl HashCheckerApp {
+    fn refresh_language_repo(&mut self) {
+        if self.language_repo_loading {
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        self.language_repo_rx = Some(rx);
+        self.language_repo_loading = true;
+        self.language_repo_status = "Lecture du repo GitHub...".to_string();
+        thread::spawn(move || {
+            let result = LanguageManager::fetch_remote_languages();
+            let _ = tx.send(result);
+        });
+    }
+
+    fn poll_language_repo(&mut self) {
+        let result = self
+            .language_repo_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+
+        if let Some(result) = result {
+            self.language_repo_rx = None;
+            self.language_repo_loading = false;
+            self.language_repo_loaded_once = true;
+            match result {
+                Ok(files) => {
+                    let count = files.len();
+                    self.language.set_remote_files(files);
+                    self.language_repo_status =
+                        format!("Repo GitHub disponible : {} langue(s).", count);
+                    self.language.network_error = false;
+                }
+                Err(e) => {
+                    self.language_repo_status = format!("Hors-ligne ou repo indisponible : {}", e);
+                }
+            }
+        }
+    }
+
+    fn show_language_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_language_window {
+            return;
+        }
+
+        let mut open = self.show_language_window;
+        egui::Window::new("Langues")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(Vec2::new(460.0, 360.0))
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Active").color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} [{}]",
+                            self.language.active_name, self.language.active_stem
+                        ))
+                        .color(Color32::WHITE)
+                        .strong(),
+                    );
+                });
+
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(&self.language_repo_status)
+                        .color(if self.language_repo_loading {
+                            Color32::from_rgb(120, 180, 255)
+                        } else {
+                            Color32::from_rgb(150, 150, 170)
+                        })
+                        .font(FontId::proportional(12.0)),
+                );
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ScrollArea::vertical().max_height(165.0).show(ui, |ui| {
+                    for pack in self.language.available_languages() {
+                        let selected = pack.stem == self.language.active_stem;
+                        let mut label = format!("{} [{}]", pack.display_name, pack.stem);
+                            if pack.is_default {
+                                label.push_str(&format!(" [{}]", self.language.default_badge));
+                            }
+                            label.push_str(if pack.is_local { " [local]" } else { " [repo]" });
+                            if pack.is_remote && pack.is_local {
+                                label.push_str(" [repo]");
+                            }
+
+                        let response = ui.selectable_label(
+                            selected,
+                            RichText::new(label).color(if pack.is_local {
+                                Color32::from_rgb(220, 230, 240)
+                            } else {
+                                Color32::from_rgb(120, 180, 255)
+                            }),
+                        );
+                        if response.clicked() {
+                            self.language_message =
+                                Some(match self.language.select_language(&pack) {
+                                    Ok(_) => {
+                                        self.language.network_error = false;
+                                        ("Langue chargée.".to_string(), true)
+                                    }
+                                    Err(e) => (e, false),
+                                });
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Dossier local : {}",
+                        self.language.lang_dir.display()
+                    ))
+                    .color(Color32::from_rgb(140, 140, 160))
+                    .font(FontId::proportional(11.0)),
+                );
+
+                if let Some((msg, ok)) = &self.language_message {
+                    ui.label(RichText::new(msg).color(if *ok {
+                        Color32::from_rgb(80, 220, 120)
+                    } else {
+                        Color32::from_rgb(255, 120, 80)
+                    }));
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Fermer").clicked() {
+                        self.show_language_window = false;
+                    }
+                    if ui
+                        .add_enabled(!self.language_repo_loading, egui::Button::new("Actualiser"))
+                        .clicked()
+                    {
+                        self.refresh_language_repo();
+                    }
+                    if ui.button("Ouvrir").clicked() {
+                        self.language.open_lang_folder();
+                    }
+                });
+            });
+        self.show_language_window = open && self.show_language_window;
+    }
+
+    fn show_network_error_dialog(&mut self, ctx: &egui::Context) {
+        if !self.language.network_error {
+            return;
+        }
+
+        egui::Window::new("Ressources linguistiques")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(Vec2::new(360.0, 110.0))
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Ce programme a besoin d'un accès internet pour télécharger ses ressources linguistiques.",
+                    )
+                    .color(Color32::from_rgb(255, 180, 80)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("OK").clicked() {
+                        self.language.network_error = false;
+                    }
+                });
+            });
     }
 }
 
@@ -682,9 +918,13 @@ impl HashCheckerApp {
     fn show_file_drop_zone(&mut self, ui: &mut egui::Ui) {
         let has_file = self.target_file.is_some();
         let label = if has_file {
-            self.target_file.as_ref().unwrap()
-                .file_name().unwrap_or_default()
-                .to_string_lossy().to_string()
+            self.target_file
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
         } else {
             "Glissez un fichier ici ou cliquez pour selectionner".to_string()
         };
@@ -697,20 +937,25 @@ impl HashCheckerApp {
             Color32::from_rgb(100, 100, 120)
         };
 
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 70.0),
-            egui::Sense::click(),
-        );
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 70.0), egui::Sense::click());
         ui.painter().rect(
-            rect, 8.0,
+            rect,
+            8.0,
             Color32::from_rgba_premultiplied(30, 30, 40, 200),
             Stroke::new(2.0, border_color),
             egui::StrokeKind::Outside,
         );
         ui.painter().text(
-            rect.center(), egui::Align2::CENTER_CENTER, &label,
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &label,
             FontId::proportional(14.0),
-            if has_file { Color32::WHITE } else { Color32::from_rgb(160, 160, 180) },
+            if has_file {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(160, 160, 180)
+            },
         );
         if response.clicked() {
             if let Some(path) = rfd::FileDialog::new()
@@ -731,14 +976,13 @@ impl HashCheckerApp {
             ];
             for (mode, label) in &modes {
                 let selected = &self.input_mode == mode;
-                let btn = egui::Button::new(
-                    RichText::new(*label).color(Color32::WHITE),
-                )
-                .fill(if selected {
-                    Color32::from_rgb(50, 100, 200)
-                } else {
-                    Color32::from_rgba_premultiplied(50, 50, 70, 150)
-                });
+                let btn = egui::Button::new(RichText::new(*label).color(Color32::WHITE)).fill(
+                    if selected {
+                        Color32::from_rgb(50, 100, 200)
+                    } else {
+                        Color32::from_rgba_premultiplied(50, 50, 70, 150)
+                    },
+                );
                 if ui.add(btn).clicked() {
                     self.input_mode = mode.clone();
                     *self.state.lock().unwrap() = VerifyState::Idle;
@@ -752,18 +996,39 @@ impl HashCheckerApp {
             InputMode::Auto => {
                 if let Some(cs) = &self.auto_checksum_found {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Checksum détecté :").color(Color32::from_rgb(160, 160, 180)));
-                        ui.label(RichText::new(cs.file_name().unwrap_or_default().to_string_lossy().to_string())
-                            .color(Color32::from_rgb(80, 200, 120)).strong());
+                        ui.label(
+                            RichText::new("Checksum détecté :")
+                                .color(Color32::from_rgb(160, 160, 180)),
+                        );
+                        ui.label(
+                            RichText::new(
+                                cs.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            )
+                            .color(Color32::from_rgb(80, 200, 120))
+                            .strong(),
+                        );
                     });
                 } else {
-                    ui.colored_label(Color32::from_rgb(255, 180, 60), "Aucun fichier checksum trouvé automatiquement.");
+                    ui.colored_label(
+                        Color32::from_rgb(255, 180, 60),
+                        "Aucun fichier checksum trouvé automatiquement.",
+                    );
                 }
             }
             InputMode::FileManual => {
                 ui.horizontal(|ui| {
-                    let cs_label = self.checksum_file.as_ref()
-                        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+                    let cs_label = self
+                        .checksum_file
+                        .as_ref()
+                        .map(|p| {
+                            p.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        })
                         .unwrap_or_else(|| "Aucun fichier sélectionné".to_string());
                     ui.label(RichText::new(cs_label).color(Color32::from_rgb(200, 200, 220)));
                     if ui.button("Choisir...").clicked() {
@@ -791,10 +1056,12 @@ impl HashCheckerApp {
                 });
                 ui.add_space(4.0);
                 ui.label(RichText::new("Hash attendu :").color(Color32::from_rgb(160, 160, 180)));
-                ui.add(egui::TextEdit::singleline(&mut self.manual_hash)
-                    .desired_width(f32::INFINITY)
-                    .font(FontId::monospace(12.0))
-                    .hint_text("ex: sha256:abc123... ou simplement la valeur du hash"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.manual_hash)
+                        .desired_width(f32::INFINITY)
+                        .font(FontId::monospace(12.0))
+                        .hint_text("ex: sha256:abc123... ou simplement la valeur du hash"),
+                );
             }
         }
     }
@@ -803,10 +1070,19 @@ impl HashCheckerApp {
         let computing = *self.state.lock().unwrap() == VerifyState::Computing;
         ui.horizontal(|ui| {
             let btn = egui::Button::new(
-                RichText::new(if computing { "Calcul en cours..." } else { "Verifier l'integrite" })
-                    .font(FontId::proportional(15.0)).strong(),
+                RichText::new(if computing {
+                    "Calcul en cours..."
+                } else {
+                    "Verifier l'integrite"
+                })
+                .font(FontId::proportional(15.0))
+                .strong(),
             )
-            .fill(if computing { Color32::from_rgb(80, 80, 100) } else { Color32::from_rgb(50, 120, 220) })
+            .fill(if computing {
+                Color32::from_rgb(80, 80, 100)
+            } else {
+                Color32::from_rgb(50, 120, 220)
+            })
             .min_size(Vec2::new(200.0, 36.0));
             if ui.add_enabled(!computing, btn).clicked() {
                 self.start_verification();
@@ -817,16 +1093,33 @@ impl HashCheckerApp {
     fn show_result(&self, ui: &mut egui::Ui) {
         match self.state.lock().unwrap().clone() {
             VerifyState::Idle | VerifyState::Computing => {}
-            VerifyState::Success(exp, comp) => show_result_box(ui, true, "VERIFICATION REUSSIE", "Le fichier est intact et non modifie.", &exp, &comp),
-            VerifyState::Failure(exp, comp) => show_result_box(ui, false, "VERIFICATION ECHOUEE", "Le fichier est corrompu ou a ete modifie !", &exp, &comp),
+            VerifyState::Success(exp, comp) => show_result_box(
+                ui,
+                true,
+                "VERIFICATION REUSSIE",
+                "Le fichier est intact et non modifie.",
+                &exp,
+                &comp,
+            ),
+            VerifyState::Failure(exp, comp) => show_result_box(
+                ui,
+                false,
+                "VERIFICATION ECHOUEE",
+                "Le fichier est corrompu ou a ete modifie !",
+                &exp,
+                &comp,
+            ),
             VerifyState::Error(msg) => {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(120, 60, 0, 180))
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("Erreur : {}", msg))
-                            .color(Color32::from_rgb(255, 180, 60)).strong());
+                        ui.label(
+                            RichText::new(format!("Erreur : {}", msg))
+                                .color(Color32::from_rgb(255, 180, 60))
+                                .strong(),
+                        );
                     });
             }
         }
@@ -843,10 +1136,10 @@ impl HashCheckerApp {
         // On lit la phase d'abord pour éviter les emprunts conflictuels
         let phase = self.multi.as_ref().map(|m| m.phase.clone());
         match phase {
-            Some(MultiPhase::Review)      => self.show_multi_review(ui),
+            Some(MultiPhase::Review) => self.show_multi_review(ui),
             Some(MultiPhase::ManualInput) => self.show_multi_manual_input(ui),
-            Some(MultiPhase::Verifying)   => self.show_multi_verifying(ui),
-            Some(MultiPhase::Results)     => self.show_multi_results(ui),
+            Some(MultiPhase::Verifying) => self.show_multi_verifying(ui),
+            Some(MultiPhase::Results) => self.show_multi_results(ui),
             None => {}
         }
     }
@@ -857,7 +1150,9 @@ impl HashCheckerApp {
 
     fn show_multi_review(&mut self, ui: &mut egui::Ui) {
         let n_total = self.multi.as_ref().map(|m| m.entries.len()).unwrap_or(0);
-        let n_selected = self.multi.as_ref()
+        let n_selected = self
+            .multi
+            .as_ref()
             .map(|m| m.entries.iter().filter(|e| e.selected).count())
             .unwrap_or(0);
 
@@ -868,9 +1163,12 @@ impl HashCheckerApp {
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new(format!("{} fichier(s) à vérifier — {} sélectionné(s)", n_total, n_selected))
-                        .font(FontId::proportional(15.0))
-                        .color(Color32::from_rgb(180, 200, 255)),
+                    RichText::new(format!(
+                        "{} fichier(s) à vérifier — {} sélectionné(s)",
+                        n_total, n_selected
+                    ))
+                    .font(FontId::proportional(15.0))
+                    .color(Color32::from_rgb(180, 200, 255)),
                 );
                 ui.add_space(4.0);
                 ui.label(
@@ -899,20 +1197,30 @@ impl HashCheckerApp {
                                     ui.checkbox(&mut entry.selected, "");
 
                                     // Nom du fichier
-                                    let fname = entry.path
-                                        .file_name().unwrap_or_default()
+                                    let fname = entry
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
                                         .to_string_lossy();
                                     ui.label(
                                         RichText::new(fname.as_ref())
-                                            .color(if entry.selected { Color32::WHITE } else { Color32::from_rgb(100, 100, 120) })
+                                            .color(if entry.selected {
+                                                Color32::WHITE
+                                            } else {
+                                                Color32::from_rgb(100, 100, 120)
+                                            })
                                             .strong(),
                                     );
 
                                     // Indicateur de source (checksum auto ou saisie requise)
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        match &entry.source {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| match &entry.source {
                                             HashSource::AutoFound(cs) => {
-                                                let cs_name = cs.file_name().unwrap_or_default().to_string_lossy();
+                                                let cs_name = cs
+                                                    .file_name()
+                                                    .unwrap_or_default()
+                                                    .to_string_lossy();
                                                 ui.label(
                                                     RichText::new(format!("→ {}", cs_name))
                                                         .color(Color32::from_rgb(80, 200, 120))
@@ -927,8 +1235,8 @@ impl HashCheckerApp {
                                                 );
                                             }
                                             _ => {}
-                                        }
-                                    });
+                                        },
+                                    );
                                 });
                             });
                         ui.add_space(2.0);
@@ -943,24 +1251,32 @@ impl HashCheckerApp {
             // Tout cocher / tout décocher
             if ui.button("Tout cocher").clicked() {
                 if let Some(multi) = &mut self.multi {
-                    for e in &mut multi.entries { e.selected = true; }
+                    for e in &mut multi.entries {
+                        e.selected = true;
+                    }
                 }
             }
             if ui.button("Tout décocher").clicked() {
                 if let Some(multi) = &mut self.multi {
-                    for e in &mut multi.entries { e.selected = false; }
+                    for e in &mut multi.entries {
+                        e.selected = false;
+                    }
                 }
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Bouton Continuer
                 let btn = egui::Button::new(
-                    RichText::new("Continuer →").font(FontId::proportional(14.0)).strong(),
+                    RichText::new("Continuer →")
+                        .font(FontId::proportional(14.0))
+                        .strong(),
                 )
                 .fill(Color32::from_rgb(50, 120, 220))
                 .min_size(Vec2::new(120.0, 32.0));
 
-                let any_selected = self.multi.as_ref()
+                let any_selected = self
+                    .multi
+                    .as_ref()
                     .map(|m| m.entries.iter().any(|e| e.selected))
                     .unwrap_or(false);
 
@@ -990,9 +1306,21 @@ impl HashCheckerApp {
         // Infos sur le fichier courant (lu avant toute mutation)
         let (current_name, queue_len, queue_pos) = {
             let multi = self.multi.as_ref().unwrap();
-            let idx = multi.manual_queue.get(multi.manual_pos).copied().unwrap_or(0);
-            let name = multi.entries.get(idx)
-                .map(|e| e.path.file_name().unwrap_or_default().to_string_lossy().to_string())
+            let idx = multi
+                .manual_queue
+                .get(multi.manual_pos)
+                .copied()
+                .unwrap_or(0);
+            let name = multi
+                .entries
+                .get(idx)
+                .map(|e| {
+                    e.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                })
                 .unwrap_or_default();
             (name, multi.manual_queue.len(), multi.manual_pos)
         };
@@ -1005,10 +1333,14 @@ impl HashCheckerApp {
                 // En-tête avec progression
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("Saisie du hash — fichier {}/{}", queue_pos + 1, queue_len))
-                            .font(FontId::proportional(15.0))
-                            .color(Color32::from_rgb(180, 200, 255))
-                            .strong(),
+                        RichText::new(format!(
+                            "Saisie du hash — fichier {}/{}",
+                            queue_pos + 1,
+                            queue_len
+                        ))
+                        .font(FontId::proportional(15.0))
+                        .color(Color32::from_rgb(180, 200, 255))
+                        .strong(),
                     );
                 });
                 ui.add_space(4.0);
@@ -1061,7 +1393,9 @@ impl HashCheckerApp {
                 ui.add_space(12.0);
 
                 // Boutons Passer / Valider
-                let input_empty = self.multi.as_ref()
+                let input_empty = self
+                    .multi
+                    .as_ref()
                     .map(|m| m.input_hash.trim().is_empty())
                     .unwrap_or(true);
 
@@ -1069,14 +1403,18 @@ impl HashCheckerApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Valider
                         let valider_btn = egui::Button::new(
-                            RichText::new("Valider →").font(FontId::proportional(14.0)).strong(),
+                            RichText::new("Valider →")
+                                .font(FontId::proportional(14.0))
+                                .strong(),
                         )
                         .fill(Color32::from_rgb(50, 120, 220))
                         .min_size(Vec2::new(100.0, 30.0));
 
                         if ui.add_enabled(!input_empty, valider_btn).clicked() {
                             let start = self.multi.as_mut().unwrap().validate_manual();
-                            if start { self.start_multi_verification(); }
+                            if start {
+                                self.start_multi_verification();
+                            }
                         }
 
                         // Passer
@@ -1088,7 +1426,9 @@ impl HashCheckerApp {
 
                         if ui.add(passer_btn).clicked() {
                             let start = self.multi.as_mut().unwrap().skip_manual();
-                            if start { self.start_multi_verification(); }
+                            if start {
+                                self.start_multi_verification();
+                            }
                         }
                     });
                 });
@@ -1128,19 +1468,23 @@ impl HashCheckerApp {
                         for entry in &multi.entries {
                             let status = entry.status.lock().unwrap().clone();
                             let (icon, color) = match &status {
-                                EntryStatus::Skipped   => ("—", Color32::from_rgb(120, 120, 140)),
+                                EntryStatus::Skipped => ("—", Color32::from_rgb(120, 120, 140)),
                                 EntryStatus::Computing => ("⏳", Color32::from_rgb(100, 180, 255)),
-                                EntryStatus::Success(_, _) => ("✓", Color32::from_rgb(80, 220, 120)),
+                                EntryStatus::Success(_, _) => {
+                                    ("✓", Color32::from_rgb(80, 220, 120))
+                                }
                                 EntryStatus::Failure(_, _) => ("✗", Color32::from_rgb(255, 80, 80)),
-                                EntryStatus::Error(_)  => ("!", Color32::from_rgb(255, 160, 60)),
-                                EntryStatus::Pending   => ("…", Color32::from_rgb(140, 140, 160)),
+                                EntryStatus::Error(_) => ("!", Color32::from_rgb(255, 160, 60)),
+                                EntryStatus::Pending => ("…", Color32::from_rgb(140, 140, 160)),
                             };
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(icon).color(color).strong());
-                                let fname = entry.path
-                                    .file_name().unwrap_or_default()
-                                    .to_string_lossy();
-                                ui.label(RichText::new(fname.as_ref()).color(Color32::from_rgb(200, 200, 220)));
+                                let fname =
+                                    entry.path.file_name().unwrap_or_default().to_string_lossy();
+                                ui.label(
+                                    RichText::new(fname.as_ref())
+                                        .color(Color32::from_rgb(200, 200, 220)),
+                                );
                             });
                         }
                     });
@@ -1153,7 +1497,9 @@ impl HashCheckerApp {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn show_multi_results(&mut self, ui: &mut egui::Ui) {
-        let (total, success, failure, error, skipped) = self.multi.as_ref()
+        let (total, success, failure, error, skipped) = self
+            .multi
+            .as_ref()
             .map(|m| m.stats())
             .unwrap_or((0, 0, 0, 0, 0));
 
@@ -1219,23 +1565,33 @@ impl HashCheckerApp {
                         let (bg, icon, status_text, status_color) = match &status {
                             EntryStatus::Success(_, _) => (
                                 Color32::from_rgba_premultiplied(0, 50, 25, 180),
-                                "✓", "RÉUSSI", Color32::from_rgb(80, 220, 120),
+                                "✓",
+                                "RÉUSSI",
+                                Color32::from_rgb(80, 220, 120),
                             ),
                             EntryStatus::Failure(_, _) => (
                                 Color32::from_rgba_premultiplied(70, 15, 15, 180),
-                                "✗", "ÉCHEC", Color32::from_rgb(255, 80, 80),
+                                "✗",
+                                "ÉCHEC",
+                                Color32::from_rgb(255, 80, 80),
                             ),
                             EntryStatus::Error(msg) => (
                                 Color32::from_rgba_premultiplied(80, 40, 0, 180),
-                                "!", msg.as_str(), Color32::from_rgb(255, 160, 60),
+                                "!",
+                                msg.as_str(),
+                                Color32::from_rgb(255, 160, 60),
                             ),
                             EntryStatus::Skipped => (
                                 Color32::from_rgba_premultiplied(20, 20, 30, 160),
-                                "—", "Ignoré", Color32::from_rgb(100, 100, 120),
+                                "—",
+                                "Ignoré",
+                                Color32::from_rgb(100, 100, 120),
                             ),
                             _ => (
                                 Color32::from_rgba_premultiplied(20, 20, 30, 160),
-                                "?", "En attente", Color32::from_rgb(140, 140, 160),
+                                "?",
+                                "En attente",
+                                Color32::from_rgb(140, 140, 160),
                             ),
                         };
 
@@ -1246,19 +1602,36 @@ impl HashCheckerApp {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     // Icône de résultat
-                                    ui.label(RichText::new(icon).color(status_color).strong()
-                                        .font(FontId::proportional(16.0)));
+                                    ui.label(
+                                        RichText::new(icon)
+                                            .color(status_color)
+                                            .strong()
+                                            .font(FontId::proportional(16.0)),
+                                    );
 
                                     // Nom du fichier
-                                    let fname = entry.path
-                                        .file_name().unwrap_or_default()
+                                    let fname = entry
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
                                         .to_string_lossy();
-                                    ui.label(RichText::new(fname.as_ref()).color(Color32::WHITE).strong());
+                                    ui.label(
+                                        RichText::new(fname.as_ref())
+                                            .color(Color32::WHITE)
+                                            .strong(),
+                                    );
 
                                     // Statut à droite
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.label(RichText::new(status_text).color(status_color).strong());
-                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(status_text)
+                                                    .color(status_color)
+                                                    .strong(),
+                                            );
+                                        },
+                                    );
                                 });
 
                                 // Pour les échecs, affiche les deux hash pour comparaison
@@ -1268,11 +1641,27 @@ impl HashCheckerApp {
                                         .num_columns(2)
                                         .spacing([6.0, 2.0])
                                         .show(ui, |ui| {
-                                            ui.label(RichText::new("Attendu :").color(Color32::from_rgb(140, 140, 160)).font(FontId::proportional(11.0)));
-                                            ui.label(RichText::new(expected).font(FontId::monospace(10.0)).color(Color32::from_rgb(180, 200, 255)));
+                                            ui.label(
+                                                RichText::new("Attendu :")
+                                                    .color(Color32::from_rgb(140, 140, 160))
+                                                    .font(FontId::proportional(11.0)),
+                                            );
+                                            ui.label(
+                                                RichText::new(expected)
+                                                    .font(FontId::monospace(10.0))
+                                                    .color(Color32::from_rgb(180, 200, 255)),
+                                            );
                                             ui.end_row();
-                                            ui.label(RichText::new("Calculé :").color(Color32::from_rgb(140, 140, 160)).font(FontId::proportional(11.0)));
-                                            ui.label(RichText::new(computed).font(FontId::monospace(10.0)).color(Color32::from_rgb(255, 120, 120)));
+                                            ui.label(
+                                                RichText::new("Calculé :")
+                                                    .color(Color32::from_rgb(140, 140, 160))
+                                                    .font(FontId::proportional(11.0)),
+                                            );
+                                            ui.label(
+                                                RichText::new(computed)
+                                                    .font(FontId::monospace(10.0))
+                                                    .color(Color32::from_rgb(255, 120, 120)),
+                                            );
                                             ui.end_row();
                                         });
                                 }
@@ -1318,34 +1707,56 @@ impl HashCheckerApp {
             .corner_radius(10.0)
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
-                ui.label(RichText::new("A propos").font(FontId::proportional(18.0)).strong().color(Color32::from_rgb(100, 180, 255)));
+                ui.label(
+                    RichText::new("A propos")
+                        .font(FontId::proportional(18.0))
+                        .strong()
+                        .color(Color32::from_rgb(100, 180, 255)),
+                );
                 ui.add_space(6.0);
 
-                egui::Grid::new("about_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Version :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new(VERSION).strong().color(Color32::WHITE));
-                    ui.end_row();
+                egui::Grid::new("about_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("Version :").color(Color32::from_rgb(160, 160, 180)),
+                        );
+                        ui.label(RichText::new(VERSION).strong().color(Color32::WHITE));
+                        ui.end_row();
 
-                    ui.label(RichText::new("Auteur :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new(AUTHORS).strong().color(Color32::WHITE));
-                    ui.end_row();
+                        ui.label(RichText::new("Auteur :").color(Color32::from_rgb(160, 160, 180)));
+                        ui.label(RichText::new(AUTHORS).strong().color(Color32::WHITE));
+                        ui.end_row();
 
-                    ui.label(RichText::new("Nom du produit :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new(PRODUCTNAME).strong().color(Color32::WHITE));
-                    ui.end_row();
+                        ui.label(
+                            RichText::new("Nom du produit :")
+                                .color(Color32::from_rgb(160, 160, 180)),
+                        );
+                        ui.label(RichText::new(PRODUCTNAME).strong().color(Color32::WHITE));
+                        ui.end_row();
 
-                    ui.label(RichText::new("GitHub :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new(GITHUB).strong().color(Color32::WHITE));
-                    ui.end_row();
+                        ui.label(RichText::new("GitHub :").color(Color32::from_rgb(160, 160, 180)));
+                        ui.label(RichText::new(GITHUB).strong().color(Color32::WHITE));
+                        ui.end_row();
 
-                    ui.label(RichText::new("Algorithmes :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new("MD5 · SHA-1 · SHA-224 · SHA-256 · SHA-384 · SHA-512 · CRC32").color(Color32::WHITE));
-                    ui.end_row();
+                        ui.label(
+                            RichText::new("Algorithmes :").color(Color32::from_rgb(160, 160, 180)),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "MD5 · SHA-1 · SHA-224 · SHA-256 · SHA-384 · SHA-512 · CRC32",
+                            )
+                            .color(Color32::WHITE),
+                        );
+                        ui.end_row();
 
-                    ui.label(RichText::new("Licence :").color(Color32::from_rgb(160, 160, 180)));
-                    ui.label(RichText::new("MIT").color(Color32::WHITE));
-                    ui.end_row();
-                });
+                        ui.label(
+                            RichText::new("Licence :").color(Color32::from_rgb(160, 160, 180)),
+                        );
+                        ui.label(RichText::new("MIT").color(Color32::WHITE));
+                        ui.end_row();
+                    });
             });
 
         ui.add_space(10.0);
@@ -1356,23 +1767,51 @@ impl HashCheckerApp {
             .corner_radius(10.0)
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
-                ui.label(RichText::new("Integration menu contextuel").font(FontId::proportional(18.0)).strong().color(Color32::from_rgb(100, 180, 255)));
-                ui.label(RichText::new("Permet de verifier un fichier via un clic droit dans l'explorateur.").color(Color32::from_rgb(160, 160, 180)));
+                ui.label(
+                    RichText::new("Integration menu contextuel")
+                        .font(FontId::proportional(18.0))
+                        .strong()
+                        .color(Color32::from_rgb(100, 180, 255)),
+                );
+                ui.label(
+                    RichText::new(
+                        "Permet de verifier un fichier via un clic droit dans l'explorateur.",
+                    )
+                    .color(Color32::from_rgb(160, 160, 180)),
+                );
                 ui.add_space(10.0);
 
                 let exe = current_exe_path();
 
                 if let Some(installed) = self.integration_status.windows_registry {
-                    self.show_integration_row(ui, "Windows (Explorateur)", installed, "windows", &exe);
+                    self.show_integration_row(
+                        ui,
+                        "Windows (Explorateur)",
+                        installed,
+                        "windows",
+                        &exe,
+                    );
                 }
                 if let Some(installed) = self.integration_status.linux_nautilus {
-                    self.show_integration_row(ui, "Linux — Nautilus (GNOME)", installed, "nautilus", &exe);
+                    self.show_integration_row(
+                        ui,
+                        "Linux — Nautilus (GNOME)",
+                        installed,
+                        "nautilus",
+                        &exe,
+                    );
                 }
                 if let Some(installed) = self.integration_status.linux_kde {
                     self.show_integration_row(ui, "Linux — Dolphin (KDE)", installed, "kde", &exe);
                 }
                 if let Some(installed) = self.integration_status.linux_thunar {
-                    self.show_integration_row(ui, "Linux — Thunar (XFCE)", installed, "thunar", &exe);
+                    self.show_integration_row(
+                        ui,
+                        "Linux — Thunar (XFCE)",
+                        installed,
+                        "thunar",
+                        &exe,
+                    );
                 }
 
                 if let Some((msg, ok)) = &self.integration_message {
@@ -1386,9 +1825,20 @@ impl HashCheckerApp {
             });
     }
 
-    fn show_integration_row(&mut self, ui: &mut egui::Ui, label: &str, installed: bool, target: &str, exe: &str) {
+    fn show_integration_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        installed: bool,
+        target: &str,
+        exe: &str,
+    ) {
         ui.horizontal(|ui| {
-            let status_color = if installed { Color32::from_rgb(80, 220, 120) } else { Color32::from_rgb(160, 160, 180) };
+            let status_color = if installed {
+                Color32::from_rgb(80, 220, 120)
+            } else {
+                Color32::from_rgb(160, 160, 180)
+            };
             let status_text = if installed { "Actif" } else { "Inactif" };
 
             ui.label(RichText::new(format!("{:<28}", label)).color(Color32::WHITE));
@@ -1396,8 +1846,12 @@ impl HashCheckerApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    if ui.add(egui::Button::new(RichText::new("Désactiver").color(Color32::WHITE))
-                        .fill(Color32::from_rgb(160, 60, 60))).clicked()
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Désactiver").color(Color32::WHITE))
+                                .fill(Color32::from_rgb(160, 60, 60)),
+                        )
+                        .clicked()
                     {
                         let result = match target {
                             "windows" => uninstall_windows(),
@@ -1413,8 +1867,12 @@ impl HashCheckerApp {
                         self.integration_status = IntegrationStatus::detect();
                     }
                 } else {
-                    if ui.add(egui::Button::new(RichText::new("Activer").color(Color32::WHITE))
-                        .fill(Color32::from_rgb(40, 130, 60))).clicked()
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Activer").color(Color32::WHITE))
+                                .fill(Color32::from_rgb(40, 130, 60)),
+                        )
+                        .clicked()
                     {
                         let result = match target {
                             "windows" => install_windows(exe),
@@ -1510,9 +1968,8 @@ fn run_entry_from_file(
         Some(e) => e.clone(),
         None => {
             let fname = target.file_name().unwrap_or_default().to_string_lossy();
-            *status.lock().unwrap() = EntryStatus::Error(
-                format!("'{}' absent du fichier checksum", fname)
-            );
+            *status.lock().unwrap() =
+                EntryStatus::Error(format!("'{}' absent du fichier checksum", fname));
             return;
         }
     };
@@ -1526,33 +1983,60 @@ fn run_entry_from_file(
 // Affichage résultat (mode fichier unique)
 // =============================================================================
 
-fn show_result_box(ui: &mut egui::Ui, success: bool, title: &str, subtitle: &str, expected: &str, computed: &str) {
+fn show_result_box(
+    ui: &mut egui::Ui,
+    success: bool,
+    title: &str,
+    subtitle: &str,
+    expected: &str,
+    computed: &str,
+) {
     let bg = if success {
         Color32::from_rgba_premultiplied(0, 80, 40, 200)
     } else {
         Color32::from_rgba_premultiplied(100, 20, 20, 200)
     };
-    let accent = if success { Color32::from_rgb(80, 220, 120) } else { Color32::from_rgb(255, 80, 80) };
+    let accent = if success {
+        Color32::from_rgb(80, 220, 120)
+    } else {
+        Color32::from_rgb(255, 80, 80)
+    };
 
     egui::Frame::new()
         .fill(bg)
         .corner_radius(10.0)
         .inner_margin(egui::Margin::same(14))
         .show(ui, |ui| {
-            ui.label(RichText::new(title).font(FontId::proportional(18.0)).strong().color(accent));
+            ui.label(
+                RichText::new(title)
+                    .font(FontId::proportional(18.0))
+                    .strong()
+                    .color(accent),
+            );
             ui.label(RichText::new(subtitle).color(Color32::from_rgb(200, 200, 200)));
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
-            egui::Grid::new("hash_grid").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                ui.label(RichText::new("Attendu :").color(Color32::from_rgb(160, 160, 180)));
-                ui.label(RichText::new(expected).font(FontId::monospace(11.0)).color(Color32::from_rgb(200, 220, 255)));
-                ui.end_row();
-                ui.label(RichText::new("Calcule :").color(Color32::from_rgb(160, 160, 180)));
-                ui.label(RichText::new(computed).font(FontId::monospace(11.0)).color(
-                    if success { Color32::from_rgb(80, 220, 120) } else { Color32::from_rgb(255, 120, 120) }
-                ));
-                ui.end_row();
-            });
+            egui::Grid::new("hash_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Attendu :").color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(
+                        RichText::new(expected)
+                            .font(FontId::monospace(11.0))
+                            .color(Color32::from_rgb(200, 220, 255)),
+                    );
+                    ui.end_row();
+                    ui.label(RichText::new("Calcule :").color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(RichText::new(computed).font(FontId::monospace(11.0)).color(
+                        if success {
+                            Color32::from_rgb(80, 220, 120)
+                        } else {
+                            Color32::from_rgb(255, 120, 120)
+                        },
+                    ));
+                    ui.end_row();
+                });
         });
 }

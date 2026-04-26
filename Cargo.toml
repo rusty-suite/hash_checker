@@ -23,6 +23,10 @@ crc32fast = "1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# Language resource parsing
+toml = "0.8"
+serde_json = "1"
+
 # Icône de la fenêtre
 image = { version = "0.25", default-features = false, features = ["png"] }
 
