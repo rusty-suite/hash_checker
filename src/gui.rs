@@ -375,7 +375,7 @@ impl Default for HashCheckerApp {
             language_message: None,
             language_repo_rx: None,
             language_repo_loading: false,
-            language_repo_status: "Repo GitHub non actualisé.".to_string(),
+            language_repo_status: String::new(),
             language_repo_loaded_once: false,
             integration_status: IntegrationStatus::detect(),
             integration_message: None,
@@ -721,9 +721,10 @@ impl HashCheckerApp {
         let (tx, rx) = mpsc::channel();
         self.language_repo_rx = Some(rx);
         self.language_repo_loading = true;
-        self.language_repo_status = "Lecture du repo GitHub...".to_string();
+        self.language_repo_status = self.language.text("repo_loading");
+        let ui_texts = self.language.ui_texts();
         thread::spawn(move || {
-            let result = LanguageManager::fetch_remote_languages();
+            let result = LanguageManager::fetch_remote_languages(ui_texts);
             let _ = tx.send(result);
         });
     }
@@ -743,11 +744,13 @@ impl HashCheckerApp {
                     let count = files.len();
                     self.language.set_remote_files(files);
                     self.language_repo_status =
-                        format!("Repo GitHub disponible : {} langue(s).", count);
+                        self.language
+                            .text_replace("repo_available", &[("count", count.to_string())]);
                     self.language.network_error = false;
                 }
                 Err(e) => {
-                    self.language_repo_status = format!("Hors-ligne ou repo indisponible : {}", e);
+                    self.language_repo_status =
+                        self.language.text_replace("repo_unavailable", &[("error", e)]);
                 }
             }
         }
@@ -759,7 +762,7 @@ impl HashCheckerApp {
         }
 
         let mut open = self.show_language_window;
-        egui::Window::new("Langues")
+        egui::Window::new(self.language.text("language_window_title"))
             .collapsible(false)
             .resizable(false)
             .fixed_size(Vec2::new(460.0, 360.0))
@@ -767,7 +770,10 @@ impl HashCheckerApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Active").color(Color32::from_rgb(160, 160, 180)));
+                    ui.label(
+                        RichText::new(self.language.text("active"))
+                            .color(Color32::from_rgb(160, 160, 180)),
+                    );
                     ui.label(
                         RichText::new(format!(
                             "{} [{}]",
@@ -780,7 +786,11 @@ impl HashCheckerApp {
 
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(&self.language_repo_status)
+                    RichText::new(if self.language_repo_status.is_empty() {
+                        self.language.text("repo_not_refreshed")
+                    } else {
+                        self.language_repo_status.clone()
+                    })
                         .color(if self.language_repo_loading {
                             Color32::from_rgb(120, 180, 255)
                         } else {
@@ -797,13 +807,13 @@ impl HashCheckerApp {
                     for pack in self.language.available_languages() {
                         let selected = pack.stem == self.language.active_stem;
                         let mut label = format!("{} [{}]", pack.display_name, pack.stem);
-                            if pack.is_default {
-                                label.push_str(&format!(" [{}]", self.language.default_badge));
-                            }
-                            label.push_str(if pack.is_local { " [local]" } else { " [repo]" });
-                            if pack.is_remote && pack.is_local {
-                                label.push_str(" [repo]");
-                            }
+                        if pack.is_default {
+                            label.push_str(&format!(" [{}]", self.language.default_badge));
+                        }
+                        label.push_str(if pack.is_local { " [local]" } else { " [repo]" });
+                        if pack.is_remote && pack.is_local {
+                            label.push_str(" [repo]");
+                        }
 
                         let response = ui.selectable_label(
                             selected,
@@ -818,7 +828,12 @@ impl HashCheckerApp {
                                 Some(match self.language.select_language(&pack) {
                                     Ok(_) => {
                                         self.language.network_error = false;
-                                        ("Langue chargée.".to_string(), true)
+                                        let msg = self.language.text("language_loaded");
+                                        if !self.language_repo_loading {
+                                            self.language_repo_status =
+                                                self.language.text("repo_not_refreshed");
+                                        }
+                                        (msg, true)
                                     }
                                     Err(e) => (e, false),
                                 });
@@ -828,9 +843,9 @@ impl HashCheckerApp {
 
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!(
-                        "Dossier local : {}",
-                        self.language.lang_dir.display()
+                    RichText::new(self.language.text_replace(
+                        "local_folder",
+                        &[("path", self.language.lang_dir.display().to_string())],
                     ))
                     .color(Color32::from_rgb(140, 140, 160))
                     .font(FontId::proportional(11.0)),
@@ -845,16 +860,19 @@ impl HashCheckerApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Fermer").clicked() {
+                    if ui.button(self.language.text("close")).clicked() {
                         self.show_language_window = false;
                     }
                     if ui
-                        .add_enabled(!self.language_repo_loading, egui::Button::new("Actualiser"))
+                        .add_enabled(
+                            !self.language_repo_loading,
+                            egui::Button::new(self.language.text("refresh")),
+                        )
                         .clicked()
                     {
                         self.refresh_language_repo();
                     }
-                    if ui.button("Ouvrir").clicked() {
+                    if ui.button(self.language.text("open")).clicked() {
                         self.language.open_lang_folder();
                     }
                 });
@@ -867,7 +885,7 @@ impl HashCheckerApp {
             return;
         }
 
-        egui::Window::new("Ressources linguistiques")
+        egui::Window::new(self.language.text("language_window_title"))
             .collapsible(false)
             .resizable(false)
             .fixed_size(Vec2::new(360.0, 110.0))
@@ -875,7 +893,7 @@ impl HashCheckerApp {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(
-                        "Ce programme a besoin d'un accès internet pour télécharger ses ressources linguistiques.",
+                        self.language.text("network_error"),
                     )
                     .color(Color32::from_rgb(255, 180, 80)),
                 );
