@@ -430,6 +430,7 @@ fn default_ui_texts() -> HashMap<String, String> {
         ("repo_loading", "Reading GitHub repo..."),
         ("repo_available", "GitHub repo available: {count} language(s)."),
         ("repo_unavailable", "Offline or repo unavailable: {error}"),
+        ("repo_status_line", "{dot} {status}"),
         ("local_folder", "Local folder: {path}"),
         ("open", "Open"),
         ("refresh", "Refresh"),

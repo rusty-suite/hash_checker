@@ -829,8 +829,15 @@ impl HashCheckerApp {
                         )
                     };
 
-                    ui.label(RichText::new(dot).color(color).font(FontId::proportional(18.0)));
-                    ui.label(RichText::new(text).color(color).font(FontId::proportional(16.0)));
+                    let status_line = self.tr(
+                        "repo_status_line",
+                        &[("dot", dot.to_string()), ("status", text)],
+                    );
+                    ui.label(
+                        RichText::new(status_line)
+                            .color(color)
+                            .font(FontId::proportional(16.0)),
+                    );
                 });
 
                 ui.horizontal(|ui| {
