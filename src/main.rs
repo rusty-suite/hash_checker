@@ -38,7 +38,6 @@ mod language; // Ressources linguistiques et répertoire de travail Rusty Suite
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::Parser;
 
 fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
@@ -72,8 +71,10 @@ fn main() {
     // ── Cas 2 : flags CLI classiques (--hash, --checksum, --algo...) ──────────
     // Déclenchés seulement si des args commencent par '-' (pas de fichiers valides)
     if raw_args.len() > 1 {
-        let cli = cli::Cli::parse(); // Clap parse et valide les arguments
-        cli::run_cli(cli); // Exécute la logique CLI en mode terminal
+        // The CLI uses the same language files as the GUI (help and messages).
+        let lang = language::LanguageManager::initialize();
+        let cli = cli::parse_localized(&lang);
+        cli::run_cli(cli, &lang);
         return;
     }
 
@@ -100,7 +101,7 @@ fn launch_gui_multi(files: Vec<PathBuf>, ipc_rx: std::sync::mpsc::Receiver<PathB
         options,
         Box::new(move |_cc| Ok(Box::new(gui::HashCheckerApp::with_files(files, ipc_rx)))),
     )
-    .expect("Erreur lors du lancement de la GUI");
+    .expect("failed to start the GUI");
 }
 
 // -----------------------------------------------------------------------------
@@ -122,7 +123,7 @@ fn launch_gui_empty(ipc_rx: std::sync::mpsc::Receiver<PathBuf>) {
             )))
         }),
     )
-    .expect("Erreur lors du lancement de la GUI");
+    .expect("failed to start the GUI");
 }
 
 // -----------------------------------------------------------------------------
@@ -149,7 +150,7 @@ fn build_window_options() -> eframe::NativeOptions {
 fn load_icon() -> eframe::egui::IconData {
     let bytes = include_bytes!("../assets/hash-checker-logo.png");
     let image =
-        image::load_from_memory(bytes).expect("Impossible de charger hash-checker-logo.png");
+        image::load_from_memory(bytes).expect("invalid embedded icon hash-checker-logo.png");
     let rgba = image.to_rgba8();
     let (width, height) = image::GenericImageView::dimensions(&rgba);
     eframe::egui::IconData {

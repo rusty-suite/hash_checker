@@ -42,7 +42,7 @@ use crate::integration::{
     IntegrationStatus, current_exe_path, install_kde, install_nautilus, install_thunar,
     install_windows, uninstall_kde, uninstall_nautilus, uninstall_thunar, uninstall_windows,
 };
-use crate::language::LanguageManager;
+use crate::language::{LanguageManager, Msg};
 
 // Informations affichées dans le panneau "À propos"
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -62,7 +62,7 @@ enum VerifyState {
     Computing,               // Calcul en cours dans un thread séparé
     Success(String, String), // (hash_attendu, hash_calculé) — identiques
     Failure(String, String), // (hash_attendu, hash_calculé) — différents
-    Error(String),           // Message d'erreur (fichier illisible, etc.)
+    Error(Msg),              // Message d'erreur, traduit à l'affichage
 }
 
 /// Mode de saisie du hash de référence (onglets du mode fichier unique).
@@ -89,8 +89,6 @@ enum Panel {
 enum HashSource {
     /// Fichier checksum détecté automatiquement dans le même répertoire.
     AutoFound(PathBuf),
-    /// Fichier checksum sélectionné manuellement par l'utilisateur.
-    ManualFile(PathBuf),
     /// Hash saisi directement par l'utilisateur (format brut ou "algo:hash").
     ManualHash(String, Algorithm),
     /// Aucun checksum trouvé : l'utilisateur doit saisir le hash manuellement.
@@ -107,7 +105,7 @@ enum EntryStatus {
     Computing,               // Calcul en cours dans un thread séparé
     Success(String, String), // (hash_attendu, hash_calculé) — identiques
     Failure(String, String), // (hash_attendu, hash_calculé) — différents
-    Error(String),           // Erreur (fichier illisible, checksum introuvable, etc.)
+    Error(Msg),              // Erreur, traduite à l'affichage
     Skipped,                 // Ignoré (décoché ou passé par l'utilisateur)
 }
 
@@ -408,11 +406,6 @@ impl HashCheckerApp {
         }
     }
 
-    /// Rétro-compatibilité : sans IPC (ne devrait plus être appelé directement).
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self::default()
-    }
-
     /// Lancement depuis le clic droit avec une liste de fichiers.
     /// Démarre directement en mode multi-fichiers.
     pub fn with_files(paths: Vec<PathBuf>, ipc_rx: Receiver<PathBuf>) -> Self {
@@ -421,13 +414,6 @@ impl HashCheckerApp {
             ipc_rx: Some(ipc_rx),
             ..Self::default()
         }
-    }
-
-    /// Rétro-compatibilité : un seul fichier sans IPC.
-    pub fn with_file(path: PathBuf) -> Self {
-        let mut app = Self::default();
-        app.set_target_file(path);
-        app
     }
 
     // ── Gestion du fichier cible (mode single) ────────────────────────────────
@@ -499,7 +485,7 @@ impl HashCheckerApp {
                 };
                 if expected.is_empty() {
                     *state.lock().unwrap() =
-                        VerifyState::Error("Veuillez entrer une valeur de hash.".to_string());
+                        VerifyState::Error(Msg::new("enter_hash_value"));
                     return;
                 }
                 thread::spawn(move || run_single_verification(target, expected, algo, state));
@@ -512,7 +498,7 @@ impl HashCheckerApp {
                 };
                 let Some(cs_path) = checksum_path else {
                     *state.lock().unwrap() =
-                        VerifyState::Error("Aucun fichier checksum sélectionné.".to_string());
+                        VerifyState::Error(Msg::new("no_checksum_selected"));
                     return;
                 };
                 let algo_fallback = self.selected_algo.clone();
@@ -527,10 +513,10 @@ impl HashCheckerApp {
                     let entry = match find_entry_for_file(&entries, &target) {
                         Some(e) => e.clone(),
                         None => {
-                            *state.lock().unwrap() = VerifyState::Error(format!(
-                                "Fichier '{}' non trouvé dans le checksum.",
-                                target.file_name().unwrap_or_default().to_string_lossy()
-                            ));
+                            *state.lock().unwrap() = VerifyState::Error(
+                                Msg::new("file_not_in_checksum")
+                                    .arg("file", target.file_name().unwrap_or_default().to_string_lossy()),
+                            );
                             return;
                         }
                     };
@@ -562,7 +548,7 @@ impl HashCheckerApp {
             }
 
             match &entry.source {
-                HashSource::AutoFound(cs) | HashSource::ManualFile(cs) => {
+                HashSource::AutoFound(cs) => {
                     *status_arc.lock().unwrap() = EntryStatus::Computing;
                     let target = entry.path.clone();
                     let cs_path = cs.clone();
@@ -780,7 +766,7 @@ impl HashCheckerApp {
         }
 
         let mut open = self.show_language_window;
-        egui::Window::new("Language / Langue")
+        egui::Window::new(self.t("language_window_title"))
             .collapsible(false)
             .resizable(false)
             .fixed_size(Vec2::new(660.0, 500.0))
@@ -851,7 +837,7 @@ impl HashCheckerApp {
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Available files:")
+                        RichText::new(self.t("available_files"))
                             .color(Color32::from_rgb(105, 105, 112))
                             .font(FontId::proportional(12.0)),
                     );
@@ -877,11 +863,15 @@ impl HashCheckerApp {
                         if pack.is_default {
                             label.push_str(&format!(" [{}]", self.language.default_badge));
                         }
-                        label.push_str(if pack.is_local { " [local]" } else { " [repo]" });
-                        if pack.is_remote && pack.is_local {
-                            label.push_str(" [git]");
-                        } else if pack.is_remote {
-                            label = label.replace("[repo]", "[git]");
+                        // Origin badges: local copy, available on GitHub, or neither (repo index).
+                        let badge = |key: &str| format!(" [{}]", self.t(key));
+                        if pack.is_local {
+                            label.push_str(&badge("badge_local"));
+                        }
+                        if pack.is_remote {
+                            label.push_str(&badge("badge_git"));
+                        } else if !pack.is_local {
+                            label.push_str(&badge("badge_repo"));
                         }
 
                         let row_height = 30.0;
@@ -939,7 +929,7 @@ impl HashCheckerApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Folder:")
+                        RichText::new(self.t("folder"))
                             .color(Color32::from_rgb(105, 105, 112))
                             .font(FontId::proportional(12.0)),
                     );
@@ -1249,7 +1239,7 @@ impl HashCheckerApp {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new(self.tr("error_prefix", &[("error", msg)]))
+                            RichText::new(self.tr("error_prefix", &[("error", self.language.msg(&msg))]))
                                 .color(Color32::from_rgb(255, 180, 60))
                                 .strong(),
                         );
@@ -1731,7 +1721,7 @@ impl HashCheckerApp {
                             EntryStatus::Error(msg) => (
                                 Color32::from_rgba_premultiplied(80, 40, 0, 180),
                                 "!",
-                                msg.clone(),
+                                self.language.msg(&msg),
                                 Color32::from_rgb(255, 160, 60),
                             ),
                             EntryStatus::Skipped => (
@@ -1937,7 +1927,7 @@ impl HashCheckerApp {
                 if let Some(installed) = self.integration_status.windows_registry {
                     self.show_integration_row(
                         ui,
-                        "Windows (Explorateur)",
+                        &self.t("integration_windows"),
                         installed,
                         "windows",
                         &exe,
@@ -2013,11 +2003,12 @@ impl HashCheckerApp {
                             "nautilus" => uninstall_nautilus(),
                             "kde" => uninstall_kde(),
                             "thunar" => uninstall_thunar(),
-                            _ => Err("Inconnu".to_string()),
+                            _ => Err("integration_unknown".to_string()),
                         };
                         self.integration_message = Some(match result {
                             Ok(_) => (self.t("disabled_success"), true),
-                            Err(e) => (self.tr("error_prefix", &[("error", e)]), false),
+                            // `e` is a translation key (see integration::UNSUPPORTED) or an OS message.
+                            Err(e) => (self.tr("error_prefix", &[("error", self.t(&e))]), false),
                         });
                         self.integration_status = IntegrationStatus::detect();
                     }
@@ -2030,15 +2021,16 @@ impl HashCheckerApp {
                         .clicked()
                     {
                         let result = match target {
-                            "windows" => install_windows(exe),
-                            "nautilus" => install_nautilus(exe),
-                            "kde" => install_kde(exe),
-                            "thunar" => install_thunar(exe),
-                            _ => Err("Inconnu".to_string()),
+                            "windows" => install_windows(exe, &self.t("context_menu_label")),
+                            "nautilus" => install_nautilus(exe, &self.t("nautilus_script_name")),
+                            "kde" => install_kde(exe, &self.t("context_menu_label")),
+                            "thunar" => install_thunar(exe, &self.t("context_menu_label"), &self.t("context_menu_description")),
+                            _ => Err("integration_unknown".to_string()),
                         };
                         self.integration_message = Some(match result {
                             Ok(_) => (self.t("enabled_success"), true),
-                            Err(e) => (self.tr("error_prefix", &[("error", e)]), false),
+                            // `e` is a translation key (see integration::UNSUPPORTED) or an OS message.
+                            Err(e) => (self.tr("error_prefix", &[("error", self.t(&e))]), false),
                         });
                         self.integration_status = IntegrationStatus::detect();
                     }
@@ -2073,7 +2065,7 @@ fn run_single_verification(
                 VerifyState::Failure(exp, comp)
             };
         }
-        Err(e) => *state.lock().unwrap() = VerifyState::Error(e.to_string()),
+        Err(e) => *state.lock().unwrap() = VerifyState::Error(Msg::raw(e.to_string())),
     }
 }
 
@@ -2097,7 +2089,7 @@ fn run_entry_direct(
                 EntryStatus::Failure(exp, comp)
             };
         }
-        Err(e) => *status.lock().unwrap() = EntryStatus::Error(e.to_string()),
+        Err(e) => *status.lock().unwrap() = EntryStatus::Error(Msg::raw(e.to_string())),
     }
 }
 
@@ -2113,7 +2105,7 @@ fn run_entry_from_file(
     let entries = match parse_checksum_file(&cs_path) {
         Ok(e) => e,
         Err(e) => {
-            *status.lock().unwrap() = EntryStatus::Error(format!("Checksum illisible : {}", e));
+            *status.lock().unwrap() = EntryStatus::Error(e);
             return;
         }
     };
@@ -2124,7 +2116,7 @@ fn run_entry_from_file(
         None => {
             let fname = target.file_name().unwrap_or_default().to_string_lossy();
             *status.lock().unwrap() =
-                EntryStatus::Error(format!("'{}' absent du fichier checksum", fname));
+                EntryStatus::Error(Msg::new("file_not_in_checksum").arg("file", fname));
             return;
         }
     };

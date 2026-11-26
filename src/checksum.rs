@@ -19,6 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::hasher::Algorithm;
+use crate::language::Msg;
 
 // -----------------------------------------------------------------------------
 // Structure représentant une ligne parsée dans un fichier checksum.
@@ -153,9 +154,9 @@ pub fn detect_algorithm_from_file(path: &Path) -> Option<Algorithm> {
 // Utilise `detect_algorithm_from_file` pour donner un indice à chaque ligne.
 // Retourne une erreur si le fichier est illisible ou ne contient rien de valide.
 // -----------------------------------------------------------------------------
-pub fn parse_checksum_file(path: &Path) -> Result<Vec<ChecksumEntry>, String> {
+pub fn parse_checksum_file(path: &Path) -> Result<Vec<ChecksumEntry>, Msg> {
     let content = fs::read_to_string(path)
-        .map_err(|e| format!("Impossible de lire le fichier : {}", e))?;
+        .map_err(|e| Msg::new("checksum_read_error").arg("error", e.to_string()))?;
 
     // On donne un "hint" d'algorithme à toutes les lignes du fichier
     // basé sur son nom/extension (ex: SHA256SUMS → on sait que c'est SHA-256)
@@ -175,7 +176,7 @@ pub fn parse_checksum_file(path: &Path) -> Result<Vec<ChecksumEntry>, String> {
     }
 
     if entries.is_empty() {
-        Err("Aucune entrée valide trouvée dans le fichier checksum.".to_string())
+        Err(Msg::new("checksum_no_entries"))
     } else {
         Ok(entries)
     }

@@ -26,10 +26,11 @@
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 
 use crate::checksum::{find_checksum_file, find_entry_for_file, parse_checksum_file};
 use crate::hasher::{compute_hash, Algorithm};
+use crate::language::LanguageManager;
 
 // -----------------------------------------------------------------------------
 // Définition des arguments de la ligne de commande.
@@ -40,26 +41,27 @@ use crate::hasher::{compute_hash, Algorithm};
 #[command(
     name = "hash_checker",
     version,
-    about = "Vérifie l'intégrité d'un fichier par comparaison de hash"
+    about = "Verifies the integrity of a file by comparing hashes"
 )]
 pub struct Cli {
-    /// Fichier à vérifier
+    // Help texts below are English fallbacks; `parse_localized` replaces them
+    // with the user language at runtime.
+    /// File to verify
     pub file: Option<PathBuf>,
 
-    /// Fichier checksum à utiliser (optionnel — auto-détecté sinon)
+    /// Checksum file to use (optional, detected automatically otherwise)
     #[arg(short, long, value_name = "CHECKSUM_FILE")]
     pub checksum: Option<PathBuf>,
 
-    /// Valeur du hash à comparer manuellement (sans fichier checksum)
+    /// Hash value to compare manually (without checksum file)
     #[arg(long, value_name = "HASH")]
     pub hash: Option<String>,
 
-    /// Algorithme à utiliser : md5, sha1, sha256, sha512, etc.
-    /// Si omis, déduit automatiquement depuis la longueur du hash.
+    /// Algorithm: md5, sha1, sha256, sha512... Deduced from the hash length if omitted.
     #[arg(short, long, value_name = "ALGO")]
     pub algo: Option<String>,
 
-    /// Affiche uniquement le hash calculé du fichier, sans comparaison
+    /// Only print the computed hash, without comparison
     #[arg(long)]
     pub compute: bool,
 }
@@ -68,20 +70,33 @@ pub struct Cli {
 // Point d'entrée du mode CLI.
 // Reçoit les arguments déjà parsés par clap et exécute la logique appropriée.
 // -----------------------------------------------------------------------------
-pub fn run_cli(cli: Cli) {
+/// Parses the command line with `--help` texts in the user language.
+pub fn parse_localized(lang: &LanguageManager) -> Cli {
+    let cmd = Cli::command()
+        .about(lang.text("cli_about"))
+        .mut_arg("file", |a| a.help(lang.text("cli_arg_file")))
+        .mut_arg("checksum", |a| a.help(lang.text("cli_arg_checksum")))
+        .mut_arg("hash", |a| a.help(lang.text("cli_arg_hash")))
+        .mut_arg("algo", |a| a.help(lang.text("cli_arg_algo")))
+        .mut_arg("compute", |a| a.help(lang.text("cli_arg_compute")));
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+pub fn run_cli(cli: Cli, lang: &LanguageManager) {
     // Vérifie qu'un fichier cible a bien été fourni
     let file = match &cli.file {
         Some(f) => f.clone(),
         None => {
-            eprintln!("Erreur : vous devez spécifier un fichier.");
-            eprintln!("Usage : hash_checker <fichier> [options]");
+            eprintln!("{}", lang.text("cli_no_file"));
+            eprintln!("{}", lang.text("cli_usage"));
             process::exit(1);
         }
     };
 
     // Vérifie que le fichier existe sur le disque
     if !file.exists() {
-        eprintln!("Erreur : fichier introuvable : {}", file.display());
+        eprintln!("{}", lang.text_replace("cli_file_not_found", &[("path", file.display().to_string())]));
         process::exit(1);
     }
 
@@ -95,11 +110,11 @@ pub fn run_cli(cli: Cli) {
             .and_then(Algorithm::from_str)
             .unwrap_or(Algorithm::Sha256); // SHA-256 par défaut si non spécifié
 
-        println!("Calcul {} de : {}", algo, file.display());
+        println!("{}", lang.text_replace("cli_computing_of", &[("algo", algo.to_string()), ("path", file.display().to_string())]));
         match compute_hash(&file, &algo) {
             Ok(h)  => println!("{}", h),
             Err(e) => {
-                eprintln!("Erreur lors du calcul : {}", e);
+                eprintln!("{}", lang.text_replace("cli_compute_error", &[("error", e.to_string())]));
                 process::exit(1);
             }
         }
@@ -117,8 +132,8 @@ pub fn run_cli(cli: Cli) {
             .or_else(|| Algorithm::from_hash_len(expected)) // sinon depuis la longueur
             .unwrap_or(Algorithm::Sha256);           // fallback SHA-256
 
-        println!("Algorithme détecté : {}", algo);
-        verify_against_hash(&file, expected, &algo);
+        println!("{}", lang.text_replace("cli_algo_detected", &[("algo", algo.to_string())]));
+        verify_against_hash(&file, expected, &algo, lang);
         return;
     }
 
@@ -129,13 +144,13 @@ pub fn run_cli(cli: Cli) {
         Some(p) => p.clone(), // Chemin fourni explicitement par l'utilisateur
         None => match find_checksum_file(&file) {
             Some(p) => {
-                println!("Fichier checksum trouvé : {}", p.display());
+                println!("{}", lang.text_replace("cli_checksum_found", &[("path", p.display().to_string())]));
                 p
             }
             None => {
                 // Aucun fichier checksum trouvé → on ne peut pas continuer
-                eprintln!("Aucun fichier checksum trouvé pour : {}", file.display());
-                eprintln!("Utilisez --checksum <fichier> ou --hash <valeur> [--algo <algo>]");
+                eprintln!("{}", lang.text_replace("cli_no_checksum", &[("path", file.display().to_string())]));
+                eprintln!("{}", lang.text("cli_checksum_hint"));
                 process::exit(1);
             }
         },
@@ -145,7 +160,7 @@ pub fn run_cli(cli: Cli) {
     let entries = match parse_checksum_file(&checksum_path) {
         Ok(e)  => e,
         Err(e) => {
-            eprintln!("Erreur de lecture du fichier checksum : {}", e);
+            eprintln!("{}", lang.msg(&e));
             process::exit(1);
         }
     };
@@ -154,11 +169,10 @@ pub fn run_cli(cli: Cli) {
     let entry = match find_entry_for_file(&entries, &file) {
         Some(e) => e,
         None => {
-            eprintln!(
-                "Fichier '{}' non trouvé dans le checksum ({} entrée(s) disponibles).",
-                file.file_name().unwrap_or_default().to_string_lossy(),
-                entries.len()
-            );
+            eprintln!("{}", lang.text_replace("cli_not_in_checksum", &[
+                ("file", file.file_name().unwrap_or_default().to_string_lossy().to_string()),
+                ("count", entries.len().to_string()),
+            ]));
             process::exit(1);
         }
     };
@@ -170,8 +184,8 @@ pub fn run_cli(cli: Cli) {
         .or_else(|| cli.algo.as_deref().and_then(Algorithm::from_str))
         .unwrap_or(Algorithm::Sha256);
 
-    println!("Algorithme : {}", algo);
-    verify_against_hash(&file, &entry.hash, &algo);
+    println!("{}", lang.text_replace("cli_algorithm", &[("algo", algo.to_string())]));
+    verify_against_hash(&file, &entry.hash, &algo, lang);
 }
 
 // -----------------------------------------------------------------------------
@@ -181,8 +195,8 @@ pub fn run_cli(cli: Cli) {
 // Code 0 → identique (fichier intact)
 // Code 2 → différent (fichier corrompu ou modifié)
 // -----------------------------------------------------------------------------
-fn verify_against_hash(file: &Path, expected: &str, algo: &Algorithm) {
-    println!("Calcul en cours...");
+fn verify_against_hash(file: &Path, expected: &str, algo: &Algorithm, lang: &LanguageManager) {
+    println!("{}", lang.text("cli_computing"));
     match compute_hash(file, algo) {
         Ok(computed) => {
             // Normalise les deux hash en minuscules avant comparaison
@@ -190,19 +204,19 @@ fn verify_against_hash(file: &Path, expected: &str, algo: &Algorithm) {
             let expected_lower = expected.to_lowercase();
             let computed_lower = computed.to_lowercase();
 
-            println!("Hash attendu  : {}", expected_lower);
-            println!("Hash calculé  : {}", computed_lower);
+            println!("{}", lang.text_replace("cli_expected", &[("hash", expected_lower.clone())]));
+            println!("{}", lang.text_replace("cli_computed", &[("hash", computed_lower.clone())]));
 
             if computed_lower == expected_lower {
-                println!("\n[OK] VERIFICATION REUSSIE - Le fichier est intact.");
+                println!("\n{}", lang.text("cli_ok"));
                 process::exit(0); // Succès
             } else {
-                println!("\n[ECHEC] VERIFICATION ECHOUEE - Le fichier est corrompu ou modifié !");
+                println!("\n{}", lang.text("cli_failed"));
                 process::exit(2); // Hash différent
             }
         }
         Err(e) => {
-            eprintln!("Erreur lors du calcul du hash : {}", e);
+            eprintln!("{}", lang.text_replace("cli_hash_error", &[("error", e.to_string())]));
             process::exit(1); // Erreur technique
         }
     }

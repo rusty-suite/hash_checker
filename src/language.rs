@@ -27,6 +27,31 @@ const CH_DE: &str = include_str!("../lang/CH_de.toml");
 const IT_IT: &str = include_str!("../lang/IT_it.toml");
 const CH_IT: &str = include_str!("../lang/CH_it.toml");
 
+/// A user-facing message: a translation key of the `[ui]` section plus the
+/// values of its `{placeholders}`. Background workers produce messages and the
+/// GUI/CLI translate them when displaying, so they follow language changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Msg {
+    pub key: &'static str,
+    pub args: Vec<(&'static str, String)>,
+}
+
+impl Msg {
+    pub fn new(key: &'static str) -> Self {
+        Self { key, args: Vec::new() }
+    }
+
+    pub fn arg(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.args.push((name, value.into()));
+        self
+    }
+
+    /// Untranslatable text (e.g. an OS error message).
+    pub fn raw(text: impl Into<String>) -> Self {
+        Self::new("raw_error").arg("text", text)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LanguagePack {
     pub stem: String,
@@ -142,6 +167,12 @@ impl LanguageManager {
             .cloned()
             .or_else(|| default_ui_texts().remove(key))
             .unwrap_or_else(|| key.to_string())
+    }
+
+    /// Translates a [`Msg`].
+    pub fn msg(&self, msg: &Msg) -> String {
+        let args: Vec<(&str, String)> = msg.args.iter().map(|(k, v)| (*k, v.clone())).collect();
+        self.text_replace(msg.key, &args)
     }
 
     pub fn text_replace(&self, key: &str, replacements: &[(&str, String)]) -> String {
@@ -376,7 +407,12 @@ fn read_language_file(path: &Path) -> Option<(String, String, String, HashMap<St
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
+    // Layers: bundled English < bundled version of this language < local file.
+    // A stale local file therefore never lacks a key.
     let mut ui = default_ui_texts();
+    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+        ui.extend(bundled_ui_texts(file_name));
+    }
     if let Some(toml::Value::Table(ui_table)) = table.get("ui") {
         for (key, value) in ui_table {
             if let Some(text) = value.as_str() {
@@ -443,99 +479,39 @@ fn display_name_from_stem(stem: &str) -> String {
     .to_string()
 }
 
+/// `[ui]` strings of a bundled language file (empty if not bundled).
+fn bundled_ui_texts(file_name: &str) -> HashMap<String, String> {
+    BUILTIN_LANGS
+        .iter()
+        .find(|(name, _)| *name == file_name)
+        .and_then(|(_, content)| toml::from_str::<toml::Table>(content).ok())
+        .and_then(|table| match table.get("ui") {
+            Some(toml::Value::Table(ui)) => Some(
+                ui.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// English strings compiled into the binary: the single fallback source.
 fn default_ui_texts() -> HashMap<String, String> {
-    [
-        ("language_window_title", "Languages"),
-        ("active", "Active"),
-        ("repo_not_refreshed", "GitHub repo not refreshed."),
-        ("repo_loading", "Reading GitHub repo..."),
-        ("repo_available", "GitHub repo available: {count} language(s)."),
-        ("repo_unavailable", "Offline or repo unavailable: {error}"),
-        ("repo_status_line", "{dot} {status}"),
-        ("local_folder", "Local folder: {path}"),
-        ("open", "Open"),
-        ("refresh", "Refresh"),
-        ("close", "Close"),
-        ("language_loaded", "Language loaded."),
-        (
-            "network_error",
-            "This program needs internet access to download its language resources.",
-        ),
-        ("language_file_invalid", "Invalid language file."),
-        ("no_remote_languages", "No TOML language found on the GitHub repo."),
-        (
-            "github_index_invalid",
-            "Invalid GitHub index: lang folder not found.",
-        ),
-        ("github_index_parse_error", "Invalid GitHub index: {error}"),
-        ("curl_start_error", "Unable to start curl: {error}"),
-        ("github_index_read_error", "Unable to read GitHub index."),
-        ("github_utf8_error", "GitHub response is not UTF-8: {error}"),
-        ("settings", "Settings"),
-        ("close_settings", "Close"),
-        ("language_tooltip", "Language settings [{lang}]"),
-        ("drop_file", "Drop a file here or click to select"),
-        ("select_file_title", "Select the file to verify"),
-        ("mode_auto", "Automatic"),
-        ("mode_checksum_file", "Checksum file"),
-        ("mode_manual_hash", "Manual hash"),
-        ("checksum_detected", "Checksum detected:"),
-        ("no_checksum_auto", "No checksum file found automatically."),
-        ("no_file_selected", "No file selected"),
-        ("choose", "Choose..."),
-        ("select_checksum_title", "Select checksum file"),
-        ("algorithm", "Algorithm:"),
-        ("expected_hash", "Expected hash:"),
-        ("manual_hash_hint", "ex: sha256:abc123... or simply the hash value"),
-        ("manual_hash_hint_short", "ex: sha256:abc123... or raw value"),
-        ("computing", "Computing..."),
-        ("verify_integrity", "Verify integrity"),
-        ("verification_success", "VERIFICATION SUCCESSFUL"),
-        ("file_intact", "The file is intact and unmodified."),
-        ("verification_failed", "VERIFICATION FAILED"),
-        ("file_modified", "The file is corrupted or has been modified!"),
-        ("error_prefix", "Error: {error}"),
-        ("multi_review_title", "{total} file(s) to verify — {selected} selected"),
-        ("multi_review_help", "Uncheck files to exclude, then click Continue."),
-        ("input_required", "Input required"),
-        ("select_all", "Select all"),
-        ("unselect_all", "Unselect all"),
-        ("continue", "Continue →"),
-        ("cancel", "Cancel"),
-        ("manual_input_title", "Hash input — file {current}/{total}"),
-        ("no_checksum_for_file", "No checksum file was found automatically for this file."),
-        ("validate", "Validate →"),
-        ("skip", "← Skip"),
-        ("all_files_intact", "ALL FILES ARE INTACT"),
-        ("multi_failed", "VERIFICATION FAILED — CORRUPTED FILE(S)"),
-        ("multi_errors", "ERROR(S) DURING VERIFICATION"),
-        ("verification_finished", "Verification finished"),
-        ("multi_stats", "{total} verified · {success} successful · {failure} failed · {error} error(s) · {skipped} skipped"),
-        ("status_success", "SUCCESS"),
-        ("status_failed", "FAILED"),
-        ("status_skipped", "Skipped"),
-        ("status_pending", "Pending"),
-        ("expected", "Expected:"),
-        ("computed", "Computed:"),
-        ("new_verification", "New verification"),
-        ("about", "About"),
-        ("version", "Version:"),
-        ("author", "Author:"),
-        ("product_name", "Product name:"),
-        ("algorithms", "Algorithms:"),
-        ("license", "License:"),
-        ("context_integration", "Context menu integration"),
-        ("context_integration_help", "Allows verifying a file from the explorer right-click menu."),
-        ("active_status", "Active"),
-        ("inactive_status", "Inactive"),
-        ("enable", "Enable"),
-        ("disable", "Disable"),
-        ("enabled_success", "Enabled successfully."),
-        ("disabled_success", "Disabled successfully."),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
-    .collect()
+    bundled_ui_texts("EN_en.default.toml")
+}
+
+/// Values of one `[ui]` key in every bundled language (used to recognise
+/// artefacts created under another language, e.g. a context-menu script).
+#[cfg(unix)]
+pub fn bundled_values(key: &str) -> Vec<String> {
+    let mut out: Vec<String> = BUILTIN_LANGS
+        .iter()
+        .filter_map(|(name, _)| bundled_ui_texts(name).remove(key))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn text_from_map(ui: &HashMap<String, String>, key: &str) -> String {
@@ -599,4 +575,63 @@ fn run_curl_text(url: &str, ui: &HashMap<String, String>) -> Result<String, Stri
 
     String::from_utf8(output.stdout)
         .map_err(|e| text_from_map(ui, "github_utf8_error").replace("{error}", &e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn ui_keys(file: &str) -> BTreeSet<String> {
+        bundled_ui_texts(file).into_keys().collect()
+    }
+
+    /// Every bundled language defines exactly the keys of the English file.
+    #[test]
+    fn all_languages_have_the_same_keys() {
+        let reference = ui_keys("EN_en.default.toml");
+        assert!(reference.len() > 50);
+        for (file, _) in BUILTIN_LANGS {
+            let k = ui_keys(file);
+            let missing: Vec<_> = reference.difference(&k).collect();
+            let extra: Vec<_> = k.difference(&reference).collect();
+            assert!(missing.is_empty() && extra.is_empty(), "{file}: missing {missing:?}, extra {extra:?}");
+        }
+    }
+
+    /// Every key used through t(), tr(), text(), text_replace() or Msg::new() exists.
+    #[test]
+    fn keys_used_in_code_exist() {
+        let reference = ui_keys("EN_en.default.toml");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = Vec::new();
+        for entry in fs::read_dir(src).unwrap().flatten() {
+            let text = fs::read_to_string(entry.path()).unwrap();
+            for call in [".t(\"", ".tr(\"", ".text(\"", ".text_replace(\"", "Msg::new(\""] {
+                for part in text.split(call).skip(1) {
+                    let key = part.split('"').next().unwrap();
+                    if !reference.contains(key) {
+                        missing.push(format!("{}: {key}", entry.path().display()));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "missing keys: {missing:#?}");
+    }
+
+    #[test]
+    fn language_window_title_is_localized() {
+        for (file, _) in BUILTIN_LANGS {
+            let title = bundled_ui_texts(file).remove("language_window_title").unwrap();
+            assert!(!title.contains('/'), "{file}: {title}");
+        }
+    }
+
+    #[test]
+    fn msg_is_translated_with_arguments() {
+        let ui = default_ui_texts();
+        let text = text_from_map(&ui, "file_not_in_checksum").replace("{file}", "a.iso");
+        assert!(text.contains("a.iso"));
+        assert_eq!(text_from_map(&ui, "raw_error"), "{text}");
+    }
 }
