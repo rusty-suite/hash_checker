@@ -50,14 +50,6 @@ impl IntegrationStatus {
             linux_thunar: detect_thunar(),
         }
     }
-
-    /// Retourne true si au moins une intégration est active (utile pour affichage).
-    pub fn any_installed(&self) -> bool {
-        self.windows_registry == Some(true)
-            || self.linux_nautilus == Some(true)
-            || self.linux_kde == Some(true)
-            || self.linux_thunar == Some(true)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -414,6 +406,7 @@ pub fn uninstall_thunar() -> Result<(), String> {
 // Parcourt le fichier ligne par ligne : dès qu'on trouve <action> suivi du
 // marqueur dans le reste du texte, on passe en mode "skip" jusqu'à </action>.
 // -----------------------------------------------------------------------------
+#[cfg(unix)]
 fn remove_xml_action(xml: &str, marker: &str) -> String {
     let mut result = String::new();
     let mut skip = false;

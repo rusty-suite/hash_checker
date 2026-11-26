@@ -89,8 +89,6 @@ enum Panel {
 enum HashSource {
     /// Fichier checksum détecté automatiquement dans le même répertoire.
     AutoFound(PathBuf),
-    /// Fichier checksum sélectionné manuellement par l'utilisateur.
-    ManualFile(PathBuf),
     /// Hash saisi directement par l'utilisateur (format brut ou "algo:hash").
     ManualHash(String, Algorithm),
     /// Aucun checksum trouvé : l'utilisateur doit saisir le hash manuellement.
@@ -408,11 +406,6 @@ impl HashCheckerApp {
         }
     }
 
-    /// Rétro-compatibilité : sans IPC (ne devrait plus être appelé directement).
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self::default()
-    }
-
     /// Lancement depuis le clic droit avec une liste de fichiers.
     /// Démarre directement en mode multi-fichiers.
     pub fn with_files(paths: Vec<PathBuf>, ipc_rx: Receiver<PathBuf>) -> Self {
@@ -421,13 +414,6 @@ impl HashCheckerApp {
             ipc_rx: Some(ipc_rx),
             ..Self::default()
         }
-    }
-
-    /// Rétro-compatibilité : un seul fichier sans IPC.
-    pub fn with_file(path: PathBuf) -> Self {
-        let mut app = Self::default();
-        app.set_target_file(path);
-        app
     }
 
     // ── Gestion du fichier cible (mode single) ────────────────────────────────
@@ -562,7 +548,7 @@ impl HashCheckerApp {
             }
 
             match &entry.source {
-                HashSource::AutoFound(cs) | HashSource::ManualFile(cs) => {
+                HashSource::AutoFound(cs) => {
                     *status_arc.lock().unwrap() = EntryStatus::Computing;
                     let target = entry.path.clone();
                     let cs_path = cs.clone();
