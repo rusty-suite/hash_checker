@@ -503,6 +503,7 @@ fn default_ui_texts() -> HashMap<String, String> {
 
 /// Values of one `[ui]` key in every bundled language (used to recognise
 /// artefacts created under another language, e.g. a context-menu script).
+#[cfg(unix)]
 pub fn bundled_values(key: &str) -> Vec<String> {
     let mut out: Vec<String> = BUILTIN_LANGS
         .iter()
