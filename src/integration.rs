@@ -22,6 +22,10 @@
 // Les fonctions sont compilées conditionnellement avec #[cfg(windows)] et
 // #[cfg(unix)] pour éviter d'inclure du code inutile selon la plateforme cible.
 // =============================================================================
+/// Error returned on platforms without this integration. It is a translation
+/// key of the `[ui]` section, translated by the GUI.
+pub const UNSUPPORTED: &str = "integration_unsupported";
+
 
 // -----------------------------------------------------------------------------
 // État de l'intégration pour chaque gestionnaire de fichiers supporté.
@@ -91,7 +95,7 @@ fn detect_windows() -> Option<bool> {
 
 /// Crée les clés de registre nécessaires pour le menu clic droit Windows
 #[cfg(windows)]
-pub fn install_windows(exe_path: &str) -> Result<(), String> {
+pub fn install_windows(exe_path: &str, label: &str) -> Result<(), String> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
@@ -104,7 +108,7 @@ pub fn install_windows(exe_path: &str) -> Result<(), String> {
 
     // Texte affiché dans le menu contextuel de l'explorateur
     shell_key
-        .set_value("", &"Vérifier l'intégrité (Hash Checker)")
+        .set_value("", &label)
         .map_err(|e| e.to_string())?;
     // Icône : chemin vers l'exe suivi de ,0 pour prendre la première icône embarquée
     shell_key
@@ -128,8 +132,8 @@ pub fn install_windows(exe_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-pub fn install_windows(_exe_path: &str) -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+pub fn install_windows(_exe_path: &str, _label: &str) -> Result<(), String> {
+    Err(UNSUPPORTED.to_string())
 }
 
 /// Supprime récursivement toutes les clés de registre créées par install_windows
@@ -145,7 +149,7 @@ pub fn uninstall_windows() -> Result<(), String> {
 
 #[cfg(not(windows))]
 pub fn uninstall_windows() -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+    Err(UNSUPPORTED.to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,16 +165,26 @@ pub fn uninstall_windows() -> Result<(), String> {
 
 /// Chemin du script Nautilus à créer/supprimer
 #[cfg(unix)]
-fn nautilus_script_path() -> std::path::PathBuf {
+fn nautilus_script_path(name: &str) -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home)
-        .join(".local/share/nautilus/scripts/Vérifier le hash")
+    std::path::PathBuf::from(home).join(".local/share/nautilus/scripts").join(name)
+}
+
+/// Existing Nautilus scripts created by this program, whatever the language
+/// that was active at install time (the script name is the menu label).
+#[cfg(unix)]
+fn nautilus_installed_scripts() -> Vec<std::path::PathBuf> {
+    crate::language::bundled_values("nautilus_script_name")
+        .iter()
+        .map(|name| nautilus_script_path(name))
+        .filter(|p| p.exists())
+        .collect()
 }
 
 /// Vérifie si le script Nautilus existe déjà
 #[cfg(unix)]
 fn detect_nautilus() -> Option<bool> {
-    Some(nautilus_script_path().exists())
+    Some(!nautilus_installed_scripts().is_empty())
 }
 
 #[cfg(not(unix))]
@@ -180,11 +194,11 @@ fn detect_nautilus() -> Option<bool> {
 
 /// Crée le script bash et le rend exécutable (chmod 755)
 #[cfg(unix)]
-pub fn install_nautilus(exe_path: &str) -> Result<(), String> {
+pub fn install_nautilus(exe_path: &str, name: &str) -> Result<(), String> {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    let script_path = nautilus_script_path();
+    let script_path = nautilus_script_path(name);
     // Crée le répertoire scripts/ s'il n'existe pas
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -210,24 +224,23 @@ pub fn install_nautilus(exe_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-pub fn install_nautilus(_exe_path: &str) -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+pub fn install_nautilus(_exe_path: &str, _name: &str) -> Result<(), String> {
+    Err(UNSUPPORTED.to_string())
 }
 
 /// Supprime le script Nautilus
 #[cfg(unix)]
 pub fn uninstall_nautilus() -> Result<(), String> {
-    let path = nautilus_script_path();
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
-    } else {
-        Ok(()) // Déjà absent, pas d'erreur
+    // Removes the script whatever the language used at install time.
+    for path in nautilus_installed_scripts() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
 #[cfg(not(unix))]
 pub fn uninstall_nautilus() -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+    Err(UNSUPPORTED.to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,7 +274,7 @@ fn detect_kde() -> Option<bool> {
 
 /// Crée le fichier .desktop pour l'intégration Dolphin/KDE
 #[cfg(unix)]
-pub fn install_kde(exe_path: &str) -> Result<(), String> {
+pub fn install_kde(exe_path: &str, label: &str) -> Result<(), String> {
     use std::fs;
 
     let path = kde_service_path();
@@ -273,7 +286,8 @@ pub fn install_kde(exe_path: &str) -> Result<(), String> {
     // MimeType : les types de fichiers sur lesquels l'action est proposée
     // %F : sera remplacé par la liste des fichiers sélectionnés
     let content = format!(
-        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=application/octet-stream;application/x-iso9660-image;\nActions=hash_check\nX-KDE-Priority=TopLevel\n\n[Desktop Action hash_check]\nName=Vérifier l'intégrité (Hash Checker)\nIcon=security-high\nExec=\"{}\" %F\n",
+        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=application/octet-stream;application/x-iso9660-image;\nActions=hash_check\nX-KDE-Priority=TopLevel\n\n[Desktop Action hash_check]\nName={}\nIcon=security-high\nExec=\"{}\" %F\n",
+        label,
         exe_path
     );
 
@@ -281,8 +295,8 @@ pub fn install_kde(exe_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-pub fn install_kde(_exe_path: &str) -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+pub fn install_kde(_exe_path: &str, _label: &str) -> Result<(), String> {
+    Err(UNSUPPORTED.to_string())
 }
 
 /// Supprime le fichier .desktop KDE
@@ -298,7 +312,7 @@ pub fn uninstall_kde() -> Result<(), String> {
 
 #[cfg(not(unix))]
 pub fn uninstall_kde() -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+    Err(UNSUPPORTED.to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -338,7 +352,7 @@ fn detect_thunar() -> Option<bool> {
 
 /// Ajoute notre entrée dans uca.xml (ou crée le fichier si absent)
 #[cfg(unix)]
-pub fn install_thunar(exe_path: &str) -> Result<(), String> {
+pub fn install_thunar(exe_path: &str, label: &str, description: &str) -> Result<(), String> {
     use std::fs;
 
     let path = thunar_uca_path();
@@ -347,8 +361,8 @@ pub fn install_thunar(exe_path: &str) -> Result<(), String> {
     // unique-id : identifiant stable pour éviter les doublons
     // patterns   : * = applicable à tous les types de fichiers
     let entry = format!(
-        "<action>\n  <icon>security-high</icon>\n  <name>Vérifier l'intégrité (Hash Checker)</name>\n  <unique-id>hash-checker-001</unique-id>\n  <command>\"{}\" \"%f\"</command>\n  <description>Vérifier le hash du fichier</description>\n  <patterns>*</patterns>\n  <directories/>\n  <audio-files/>\n  <image-files/>\n  <other-files/>\n  <text-files/>\n  <video-files/>\n</action>",
-        exe_path
+        "<action>\n  <icon>security-high</icon>\n  <name>{}</name>\n  <unique-id>hash-checker-001</unique-id>\n  <command>\"{}\" \"%f\"</command>\n  <description>{}</description>\n  <patterns>*</patterns>\n  <directories/>\n  <audio-files/>\n  <image-files/>\n  <other-files/>\n  <text-files/>\n  <video-files/>\n</action>",
+        label, exe_path, description
     );
 
     if path.exists() {
@@ -373,8 +387,8 @@ pub fn install_thunar(exe_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-pub fn install_thunar(_exe_path: &str) -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+pub fn install_thunar(_exe_path: &str, _label: &str, _description: &str) -> Result<(), String> {
+    Err(UNSUPPORTED.to_string())
 }
 
 /// Retire notre bloc <action> du fichier uca.xml de Thunar
@@ -392,7 +406,7 @@ pub fn uninstall_thunar() -> Result<(), String> {
 
 #[cfg(not(unix))]
 pub fn uninstall_thunar() -> Result<(), String> {
-    Err("Non disponible sur ce système.".to_string())
+    Err(UNSUPPORTED.to_string())
 }
 
 // -----------------------------------------------------------------------------
