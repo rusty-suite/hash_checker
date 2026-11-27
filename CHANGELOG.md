@@ -8,6 +8,10 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 ## [Non publié]
 
+### Corrigé
+- La fenêtre « À propos » affichait la licence MIT : elle affiche désormais PolyForm Noncommercial 1.0.0,
+  lue depuis `Cargo.toml` (qui la déclare maintenant).
+
 ## [0.2.0] - 2026-11-26
 
 ### Ajouté
