@@ -8,6 +8,8 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 ## [Non publié]
 
+## [0.4.0] - 2026-11-28
+
 ### Ajouté
 - Nouvelle interface conforme à la charte Rusty Suite (thème sombre, polices Inter et
   JetBrains Mono, logo animé, navigation clavier Alt+1 à Alt+5, F6, F1).
@@ -65,7 +67,8 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 Première pré-release publique (tag historique `Win_&_Linux`).
 
-[Non publié]: https://github.com/rusty-suite/hash_checker/compare/v0.3.0...HEAD
+[Non publié]: https://github.com/rusty-suite/hash_checker/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rusty-suite/hash_checker/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rusty-suite/hash_checker/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rusty-suite/hash_checker/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rusty-suite/hash_checker/compare/Win_%26_Linux...v0.2.0
