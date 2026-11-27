@@ -30,7 +30,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 
 use crate::checksum::{find_checksum_file, find_entry_for_file, parse_checksum_file};
 use crate::hasher::{compute_hash, Algorithm};
-use crate::language::LanguageManager;
+use crate::language::Texts;
 
 // -----------------------------------------------------------------------------
 // Définition des arguments de la ligne de commande.
@@ -71,7 +71,7 @@ pub struct Cli {
 // Reçoit les arguments déjà parsés par clap et exécute la logique appropriée.
 // -----------------------------------------------------------------------------
 /// Parses the command line with `--help` texts in the user language.
-pub fn parse_localized(lang: &LanguageManager) -> Cli {
+pub fn parse_localized(lang: &Texts) -> Cli {
     let cmd = Cli::command()
         .about(lang.text("cli_about"))
         .mut_arg("file", |a| a.help(lang.text("cli_arg_file")))
@@ -83,7 +83,7 @@ pub fn parse_localized(lang: &LanguageManager) -> Cli {
     Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
 
-pub fn run_cli(cli: Cli, lang: &LanguageManager) {
+pub fn run_cli(cli: Cli, lang: &Texts) {
     // Vérifie qu'un fichier cible a bien été fourni
     let file = match &cli.file {
         Some(f) => f.clone(),
@@ -195,7 +195,7 @@ pub fn run_cli(cli: Cli, lang: &LanguageManager) {
 // Code 0 → identique (fichier intact)
 // Code 2 → différent (fichier corrompu ou modifié)
 // -----------------------------------------------------------------------------
-fn verify_against_hash(file: &Path, expected: &str, algo: &Algorithm, lang: &LanguageManager) {
+fn verify_against_hash(file: &Path, expected: &str, algo: &Algorithm, lang: &Texts) {
     println!("{}", lang.text("cli_computing"));
     match compute_hash(file, algo) {
         Ok(computed) => {
