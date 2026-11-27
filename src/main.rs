@@ -1,161 +1,99 @@
 // Masque la fenêtre de terminal noire sur Windows quand on lance la GUI.
-// Sans cet attribut, Windows ouvre un terminal en arrière-plan derrière la fenêtre.
 // Note : en mode CLI (arguments), le terminal reste visible car il est nécessaire.
 // Sur Linux cet attribut est ignoré.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // =============================================================================
-// main.rs — Point d'entrée du programme Hash Checker
+// main.rs — Point d'entrée de Hash Checker
 //
-// Quatre scénarios de lancement :
+// Scénarios de lancement :
+//   1. Aucun argument : interface vide (dépôt de fichier).
+//   2. Un ou plusieurs fichiers (clic droit dans l'explorateur) : si une fenêtre est
+//      déjà ouverte, les fichiers lui sont transmis et ce processus se termine
+//      (instance unique, `rusty_core::instance`) ; sinon la fenêtre s'ouvre avec eux.
+//   3. Options de ligne de commande (--hash, --checksum, --algo…) : mode terminal.
 //
-//   1. Aucun argument
-//      → Ouvre l'interface graphique vide (drag & drop)
-//      → Démarre le serveur IPC pour recevoir des fichiers d'autres instances
-//
-//   2. Un ou plusieurs chemins de fichiers valides
-//      → Mode multi-fichiers (clic droit explorateur sur 1 ou N fichiers)
-//      → Si une instance est DÉJÀ ouverte : lui envoie les chemins via IPC
-//        et quitte immédiatement (pas de nouvelle fenêtre)
-//      → Sinon : devient l'instance principale, démarre l'IPC, ouvre la GUI
-//
-//   3. Flags CLI (--hash, --checksum, --algo, etc.)
-//      → Lance le mode terminal sans interface graphique
-//
-// L'IPC (src/ipc.rs) garantit qu'une seule fenêtre s'ouvre même si Windows
-// lance N processus pour N fichiers sélectionnés dans l'explorateur.
+// Avant l'interface : dossier de données portable, journal, réglages et contrôle de
+// la dernière mise à jour (retour arrière automatique si elle a planté, charte 06).
 // =============================================================================
 
-// Déclaration des modules du projet
-mod checksum; // Lecture et parsing des fichiers checksum (.sha256, SHA256SUMS, etc.)
-mod cli; // Interface ligne de commande (arguments, affichage résultat terminal)
-mod gui; // Interface graphique (fenêtre egui)
-mod hasher; // Calcul des empreintes hash (MD5, SHA-1, SHA-256, SHA-512, CRC32...)
-mod integration; // Intégration menu contextuel OS (Windows registre, Linux Nautilus/KDE/Thunar)
-mod ipc; // Communication inter-processus (instance unique via TCP local)
-mod language; // Ressources linguistiques et répertoire de travail Rusty Suite
+mod checksum; // Lecture des fichiers checksum (.sha256, SHA256SUMS…)
+mod cli; // Ligne de commande
+mod gui; // Interface graphique (charte Rusty Suite, via rusty_kit)
+mod hasher; // Calcul des empreintes (MD5, SHA-1, SHA-2, CRC32)
+mod integration; // Menu contextuel (registre Windows, Nautilus, Dolphin, Thunar)
+mod language; // Packs de langue de l'application et messages traduits
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rusty_core::{instance, journal, lang, paths, settings, update};
 
 fn main() {
-    let raw_args: Vec<String> = std::env::args().collect();
+    let data_dir = paths::data_dir(gui::APP_ID);
+    let log_path = journal::init(gui::APP_ID, gui::VERSION, &data_dir);
+    lang::install_local(language::PACKS, &data_dir, gui::VERSION);
+    let settings: gui::Settings = settings::load(&data_dir);
 
-    // Collecte tous les arguments qui sont des chemins de fichiers existants.
-    // Filtre les flags CLI (qui commencent par '-') pour ne garder que les chemins.
-    let file_args: Vec<PathBuf> = raw_args[1..]
+    let rolled_back = match update::startup(&data_dir, gui::VERSION) {
+        update::Startup::Relaunched => return, // l'ancienne version a été relancée
+        update::Startup::RolledBack(v) => Some(v),
+        update::Startup::Normal => None,
+    };
+
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let file_args: Vec<PathBuf> = raw_args
         .iter()
-        .filter(|a| !a.starts_with('-')) // Ignore les flags comme --hash, --algo, etc.
+        .filter(|a| !a.starts_with('-'))
         .map(PathBuf::from)
-        .filter(|p| p.exists() && p.is_file()) // Garde seulement les fichiers valides
+        .filter(|p| p.is_file())
         .collect();
 
-    // ── Cas 1 : fichiers passés en argument (clic droit explorateur) ──────────
-    if !file_args.is_empty() {
-        // Tente d'envoyer les fichiers à une instance déjà ouverte via IPC.
-        // Si une instance tourne déjà, elle reçoit les fichiers et ce processus
-        // se termine immédiatement → pas de fenêtre supplémentaire.
-        if ipc::send_to_existing(&file_args) {
-            return;
-        }
-        // Pas d'instance active → on devient l'instance principale.
-        // Démarre le serveur IPC pour recevoir d'éventuels fichiers supplémentaires
-        // (Windows peut envoyer les fichiers en rafale avec quelques ms d'écart).
-        let ipc_rx = ipc::start_server();
-        launch_gui_multi(file_args, ipc_rx);
-        ipc::cleanup(); // Supprime le fichier de port à la fermeture
+    // Mode terminal dès qu'une option est présente (`hash_checker f.iso --hash …`), ou si
+    // les arguments ne sont pas des fichiers existants. Le clic droit ne passe que des
+    // chemins : il ouvre toujours l'interface.
+    let has_option = raw_args.iter().any(|a| a.starts_with('-'));
+    if has_option || (file_args.is_empty() && !raw_args.is_empty()) {
+        let lang = lang::Lang::load(language::PACKS, &data_dir, &settings.common.language);
+        let texts = language::Texts(&lang);
+        let cli = cli::parse_localized(&texts);
+        cli::run_cli(cli, &texts);
         return;
     }
 
-    // ── Cas 2 : flags CLI classiques (--hash, --checksum, --algo...) ──────────
-    // Déclenchés seulement si des args commencent par '-' (pas de fichiers valides)
-    if raw_args.len() > 1 {
-        // The CLI uses the same language files as the GUI (help and messages).
-        let lang = language::LanguageManager::initialize();
-        let cli = cli::parse_localized(&lang);
-        cli::run_cli(cli, &lang);
-        return;
-    }
+    // Instance unique : Windows lance un processus par fichier sélectionné.
+    let forwarded: Vec<String> = file_args.iter().map(|p| p.display().to_string()).collect();
+    let args_rx = match instance::start(gui::APP_ID, &forwarded) {
+        instance::Instance::Secondary => return,
+        instance::Instance::Primary(rx) => rx,
+    };
 
-    // ── Cas 3 : aucun argument → GUI vide (drag & drop) ──────────────────────
-    // Démarre quand même le serveur IPC : si l'utilisateur fait un clic droit
-    // pendant que cette fenêtre est ouverte, le fichier arrivera ici plutôt
-    // qu'ouvrir une nouvelle fenêtre.
-    let ipc_rx = ipc::start_server();
-    launch_gui_empty(ipc_rx);
-    ipc::cleanup();
-}
+    // La nouvelle version est déclarée saine après un temps de fonctionnement minimal.
+    update::mark_healthy_later(data_dir.clone());
 
-// -----------------------------------------------------------------------------
-// Lance la GUI en mode multi-fichiers avec une liste de fichiers initiaux.
-// Utilisé quand des fichiers sont passés en argument (clic droit explorateur).
-//
-// `files`  : fichiers à charger immédiatement dans la liste de vérification
-// `ipc_rx` : channel pour recevoir des fichiers supplémentaires via IPC
-// -----------------------------------------------------------------------------
-fn launch_gui_multi(files: Vec<PathBuf>, ipc_rx: std::sync::mpsc::Receiver<PathBuf>) {
-    let options = build_window_options();
-    eframe::run_native(
-        "Hash Checker",
-        options,
-        Box::new(move |_cc| Ok(Box::new(gui::HashCheckerApp::with_files(files, ipc_rx)))),
-    )
-    .expect("failed to start the GUI");
-}
-
-// -----------------------------------------------------------------------------
-// Lance la GUI en mode vide (drag & drop).
-// Utilisé quand aucun fichier n'est passé en argument.
-//
-// `ipc_rx` : channel pour recevoir des fichiers si l'utilisateur fait un
-//            clic droit pendant que cette fenêtre est déjà ouverte
-// -----------------------------------------------------------------------------
-fn launch_gui_empty(ipc_rx: std::sync::mpsc::Receiver<PathBuf>) {
-    let options = build_window_options();
-    eframe::run_native(
-        "Hash Checker",
-        options,
-        Box::new(move |cc| {
-            Ok(Box::new(gui::HashCheckerApp::new_with_ipc(
-                cc,
-                Some(ipc_rx),
-            )))
-        }),
-    )
-    .expect("failed to start the GUI");
-}
-
-// -----------------------------------------------------------------------------
-// Construit la configuration commune de la fenêtre principale.
-// Centralisé ici pour éviter la duplication entre les deux modes de lancement.
-// -----------------------------------------------------------------------------
-fn build_window_options() -> eframe::NativeOptions {
-    eframe::NativeOptions {
+    let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Hash Checker")
-            .with_inner_size([680.0, 540.0]) // Un peu plus haut pour le mode liste
-            .with_min_inner_size([520.0, 400.0])
+            .with_inner_size([780.0, 680.0])
+            .with_min_inner_size([560.0, 460.0])
             .with_drag_and_drop(true)
             .with_icon(Arc::new(load_icon())),
         ..Default::default()
+    };
+    if let Err(e) = eframe::run_native(
+        "Hash Checker",
+        options,
+        Box::new(move |cc| Ok(Box::new(gui::HashCheckerApp::new(cc, file_args, args_rx, data_dir, log_path, settings, rolled_back)))),
+    ) {
+        log::error!("Impossible de démarrer l'interface : {e}");
     }
 }
 
-// -----------------------------------------------------------------------------
-// Charge l'icône de la fenêtre depuis assets/hash-checker-logo.png.
-// Le fichier PNG est intégré dans le binaire au moment de la compilation
-// via include_bytes! — aucun fichier externe requis à l'exécution.
-// -----------------------------------------------------------------------------
+/// Icône de la fenêtre, intégrée au binaire.
 fn load_icon() -> eframe::egui::IconData {
     let bytes = include_bytes!("../assets/hash-checker-logo.png");
-    let image =
-        image::load_from_memory(bytes).expect("invalid embedded icon hash-checker-logo.png");
+    let image = image::load_from_memory(bytes).expect("invalid embedded icon hash-checker-logo.png");
     let rgba = image.to_rgba8();
     let (width, height) = image::GenericImageView::dimensions(&rgba);
-    eframe::egui::IconData {
-        rgba: rgba.into_raw(),
-        width,
-        height,
-    }
+    eframe::egui::IconData { rgba: rgba.into_raw(), width, height }
 }
