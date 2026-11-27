@@ -46,6 +46,9 @@ use crate::language::{LanguageManager, Msg};
 
 // Informations affichées dans le panneau "À propos"
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Licence affichée dans « À propos » : lue depuis `Cargo.toml` pour rester
+/// l'unique source de vérité (identifiant SPDX).
+const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 const AUTHORS: &str = "Rusty-Suite.com";
 const PRODUCTNAME: &str = "Hash Checker";
 const GITHUB: &str = "https://github.com/rusty-suite/hash_checker";
@@ -1897,7 +1900,7 @@ impl HashCheckerApp {
                         ui.label(
                             RichText::new(self.t("license")).color(Color32::from_rgb(160, 160, 180)),
                         );
-                        ui.label(RichText::new("MIT").color(Color32::WHITE));
+                        ui.label(RichText::new(LICENSE).color(Color32::WHITE));
                         ui.end_row();
                     });
             });
