@@ -2,7 +2,7 @@
 name = "hash_checker"
 version = "0.2.1"
 edition = "2024"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "hash_checker"
