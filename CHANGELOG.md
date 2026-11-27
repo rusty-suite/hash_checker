@@ -8,6 +8,28 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 ## [Non publié]
 
+### Ajouté
+- Nouvelle interface conforme à la charte Rusty Suite (thème sombre, polices Inter et
+  JetBrains Mono, logo animé, navigation clavier Alt+1 à Alt+5, F6, F1).
+- Mise à jour automatique avec contrôle SHA-256 et retour à la version précédente si la
+  nouvelle ne démarre pas.
+- Journal de l'application avec rotation, ouvrable depuis les paramètres.
+- Programme portable : langues, réglages et journal dans `hash_checker-data` à côté de
+  l'exécutable.
+
+### Modifié
+- Source du hash choisie par un slider 3 positions ; résultats avec valeurs copiables.
+- Menu contextuel activé ou désactivé par des sliders dans les paramètres.
+- Langues gérées par la bibliothèque commune de la suite (rusty_kit) : packs mis à jour
+  depuis GitHub seulement s'ils sont aussi récents que le programme.
+
+### Corrigé
+- `hash_checker <fichier> --hash …` ouvrait l'interface au lieu du mode terminal.
+
+### Supprimé
+- Ancienne fenêtre de langue, téléchargement via curl et communication inter-processus
+  maison (remplacés par rusty_kit).
+
 ## [0.3.0] - 2026-11-28
 
 ### Modifié
