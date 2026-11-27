@@ -8,6 +8,12 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 ## [Non publié]
 
+## [0.2.1] - 2026-11-27
+
+### Corrigé
+- La fenêtre « À propos » affichait la licence MIT : elle affiche désormais PolyForm Noncommercial 1.0.0,
+  lue depuis `Cargo.toml` (qui la déclare maintenant).
+
 ## [0.2.0] - 2026-11-26
 
 ### Ajouté
@@ -32,6 +38,7 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 Première pré-release publique (tag historique `Win_&_Linux`).
 
-[Non publié]: https://github.com/rusty-suite/hash_checker/compare/v0.2.0...HEAD
+[Non publié]: https://github.com/rusty-suite/hash_checker/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/rusty-suite/hash_checker/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rusty-suite/hash_checker/compare/Win_%26_Linux...v0.2.0
 [0.1.0]: https://github.com/rusty-suite/hash_checker/releases/tag/Win_%26_Linux
