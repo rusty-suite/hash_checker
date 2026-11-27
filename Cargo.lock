@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "hash_checker"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "crc32fast",
