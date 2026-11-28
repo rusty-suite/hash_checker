@@ -74,10 +74,13 @@ fn main() {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Hash Checker")
-            .with_inner_size([780.0, 680.0])
+            .with_inner_size([780.0, 560.0])
             .with_min_inner_size([560.0, 460.0])
             .with_drag_and_drop(true)
             .with_icon(Arc::new(load_icon())),
+        // Centrée, 560 pt de haut : la fenêtre reste au-dessus de la barre des tâches
+        // sur un écran 1080p à 150 % (le centrage ignore la barre des tâches).
+        centered: true,
         ..Default::default()
     };
     if let Err(e) = eframe::run_native(
