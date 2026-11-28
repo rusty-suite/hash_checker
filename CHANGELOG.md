@@ -8,6 +8,12 @@ et le projet respecte le [Versionnage sémantique](https://semver.org/lang/fr/) 
 
 ## [Non publié]
 
+## [0.4.1] - 2026-11-28
+
+### Corrigé
+- Fenêtre trop haute sur un écran 1080p à 150 % : elle s'ouvre centrée, 560 pt de haut,
+  au-dessus de la barre des tâches.
+
 ## [0.4.0] - 2026-11-28
 
 ### Ajouté

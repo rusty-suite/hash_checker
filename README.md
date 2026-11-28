@@ -1,7 +1,7 @@
 # Hash Checker
 
 A fast and ergonomic file integrity verifier built in Rust.
-Supports automatic checksum file detection, multiple hash algorithms, drag-and-drop, right-click shell integration on Windows and Linux, and a clean dual-mode interface — GUI and CLI.
+Supports automatic checksum file detection, multiple hash algorithms, drag-and-drop, right-click shell integration on Windows and Linux, and a clean dual-mode interface: GUI and CLI.
 
 ---
 
@@ -54,9 +54,9 @@ hash_checker.exe ubuntu-24.04.iso --compute --algo sha256
 
 | Code | Meaning |
 |------|---------|
-| `0` | Verification passed — file is intact |
+| `0` | Verification passed: file is intact |
 | `1` | Error (file not found, unreadable checksum, etc.) |
-| `2` | Verification failed — file is corrupted or modified |
+| `2` | Verification failed: file is corrupted or modified |
 
 ---
 
@@ -68,9 +68,9 @@ MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, CRC32
 
 ## Supported checksum file formats
 
-- `<hash>  <filename>` — standard GNU coreutils (`sha256sum`, `md5sum`)
-- `<hash> *<filename>` — binary mode variant
-- `<filename>:<hash>` and `<filename>=<hash>` — alternative formats
+- `<hash>  <filename>`: standard GNU coreutils (`sha256sum`, `md5sum`)
+- `<hash> *<filename>`: binary mode variant
+- `<filename>:<hash>` and `<filename>=<hash>`: alternative formats
 
 Auto-detected file names: `SHA256SUMS`, `sha256sums`, `MD5SUMS`, `checksums.txt`, `<filename>.sha256`, etc.
 
